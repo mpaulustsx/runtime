@@ -1,49 +1,37 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  linux_x64_gcc:
-    name: Linux x64 (GCC)
+  linux:
+    name: Linux x64 (${{ matrix.compiler.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - { name: GCC,   cc: gcc,   cxx: g++,     artifact: sqfvm_linux_x64_gcc, cxxflags: "-Wno-changes-meaning" }
+          - { name: Clang, cc: clang, cxx: clang++,  artifact: sqfvm_linux_x64_clang, cxxflags: "" }
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-      - name: Build Linux x64
-        run: mkdir build && cd build && cmake .. && cmake --build . --parallel 2
+      - name: Build
+        run: |
+          cmake -B build
+          cmake --build build --parallel $(nproc)
         env:
-          CC: gcc-9
-          CXX: g++-9
+          CC:  ${{ matrix.compiler.cc }}
+          CXX: ${{ matrix.compiler.cxx }}
+          CXXFLAGS: ${{ matrix.compiler.cxxflags }}
 
-      - name: Upload Linux x64 binaries
-        uses: actions/upload-artifact@v2
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
         with:
-          name: sqfvm_linux_x64_gcc
-          path: build/sqfvm*
-
-      - name: Run SQF-VM Tests
-        working-directory: build
-        run: ctest --output-on-failure
-
-      - name: Run CBA A3 Tests
-        run: PATH=build:$PATH python tests/cba/cba_a3.py
-
-  linux_x64_clang:
-    name: Linux x64 (Clang)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: Build Linux x64
-        run: mkdir build && cd build && cmake .. && cmake --build . --parallel 2
-        env:
-          CC: clang
-          CXX: clang++
-
-      - name: Upload Linux x64 binaries
-        uses: actions/upload-artifact@v2
-        with:
-          name: sqfvm_linux_x64_clang
+          name: ${{ matrix.compiler.artifact }}
           path: build/sqfvm*
 
       - name: Run SQF-VM Tests
@@ -57,13 +45,15 @@ jobs:
     name: macOS
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-      - name: Build macOS
-        run: mkdir build && cd build && cmake .. && cmake --build . --parallel 2
-        
-      - name: Upload macOS binaries
-        uses: actions/upload-artifact@v2
+      - name: Build
+        run: |
+          cmake -B build
+          cmake --build build --parallel $(sysctl -n hw.ncpu)
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
         with:
           name: sqfvm_macos
           path: build/sqfvm*
@@ -75,19 +65,27 @@ jobs:
       - name: Run CBA A3 Tests
         run: PATH=build:$PATH python tests/cba/cba_a3.py
 
-  windows_win32:
-    name: Windows Win32
+  windows:
+    name: Windows ${{ matrix.arch }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: Win32, cmake_arch: Win32, artifact: sqfvm_windows_win32 }
+          - { arch: x64,   cmake_arch: x64,   artifact: sqfvm_windows_x64 }
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-      - name: Build Windows Win32
-        run: mkdir build && cd build && cmake -A Win32 .. && cmake --build . --config Release
+      - name: Build
+        run: |
+          cmake -B build -A ${{ matrix.cmake_arch }}
+          cmake --build build --config Release --parallel $env:NUMBER_OF_PROCESSORS
 
-      - name: Upload Windows Win32 binaries
-        uses: actions/upload-artifact@v2
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
         with:
-          name: sqfvm_windows_win32
+          name: ${{ matrix.artifact }}
           path: build/Release/*.exe
 
       - name: Run SQF-VM Tests
@@ -99,26 +97,43 @@ jobs:
           $env:Path += ";build/Release/"
           python tests/cba/cba_a3.py
 
-  windows_x64:
-    name: Windows x64
-    runs-on: windows-latest
+  # ── Release ────────────────────────────────────────────────────────
+  # Only runs on push-to-master (not PRs, not workflow_dispatch).
+  # Waits for every CI job to pass before publishing.
+  release:
+    name: Publish Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write          # required to create releases & tags
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-      - name: Build Windows x64
-        run: mkdir build && cd build && cmake -A x64 .. && cmake --build . --config Release
-
-      - name: Upload Windows x64 binaries
-        uses: actions/upload-artifact@v2
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: sqfvm_windows_x64
-          path: build/Release/*.exe
+          path: artifacts/
 
-      - name: Run SQF-VM Tests
-        working-directory: build
-        run: ctest --output-on-failure -C Release
-
-      - name: Run CBA A3 Tests
+      - name: Package artifacts
         run: |
-          $env:Path += ";build/Release/"
-          python tests/cba/cba_a3.py
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            zip -r "../${name}.zip" "$dir"
+          done
+
+      - name: Generate release tag
+        id: tag
+        run: |
+          TAG="v$(date -u +'%Y.%m.%d')-${GITHUB_SHA::7}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Generated tag: $TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Build ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: "*.zip"

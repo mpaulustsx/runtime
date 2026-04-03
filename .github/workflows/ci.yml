@@ -14,8 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         compiler:
-          - { name: GCC,   cc: gcc,   cxx: g++,     artifact: sqfvm_linux_x64_gcc }
-          - { name: Clang, cc: clang, cxx: clang++,  artifact: sqfvm_linux_x64_clang }
+          - { name: GCC,   cc: gcc,   cxx: g++,     artifact: sqfvm_linux_x64_gcc, cxxflags: "-Wno-changes-meaning" }
+          - { name: Clang, cc: clang, cxx: clang++,  artifact: sqfvm_linux_x64_clang, cxxflags: "" }
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +26,7 @@ jobs:
         env:
           CC:  ${{ matrix.compiler.cc }}
           CXX: ${{ matrix.compiler.cxx }}
+          CXXFLAGS: ${{ matrix.compiler.cxxflags }}
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4

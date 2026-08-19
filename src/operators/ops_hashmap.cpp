@@ -249,10 +249,28 @@ namespace
         return std::make_shared<d_array>(values);
     }
 
-    // left merge [source, overwriteExisting]
-    // source may be a hashmap or an array of [key, value] pairs. Without
-    // overwriteExisting a key the target already holds is left alone, which is
-    // what makes merge usable for filling in defaults.
+    // Adds every pair of source into target. A key the target already holds is
+    // only replaced when overwriteExisting says so, which is what makes merge
+    // usable for filling in defaults.
+    void merge_into(
+        std::unordered_map<sqf::runtime::value, sqf::runtime::value>& target,
+        std::unordered_map<sqf::runtime::value, sqf::runtime::value>& source,
+        bool overwrite)
+    {
+        for (auto& it : source)
+        {
+            if (overwrite || target.find(it.first) == target.end()) { target[it.first] = it.second; }
+        }
+    }
+
+    // hashMap1 merge hashMap2
+    value merge_hashmap_hashmap(runtime& runtime, value::cref left, value::cref right)
+    {
+        merge_into(left.data<d_hashmap>()->map(), right.data<d_hashmap>()->map(), false);
+        return {};
+    }
+
+    // hashMap1 merge [hashMap2, overwriteExisting]
     value merge_hashmap_array(runtime& runtime, value::cref left, value::cref right)
     {
         auto arr = right.data<d_array>();
@@ -261,6 +279,18 @@ namespace
             runtime.__logmsg(err::ExpectedArraySizeMissmatch(
                 runtime.context_active().current_frame().diag_info_from_position(),
                 1, 2, arr->size()));
+            return {};
+        }
+
+        // The engine takes a hashmap here and nothing else. Accepting an array
+        // of pairs as well would let code pass here and fail in the game,
+        // which is the one direction a test runner must not be lenient in.
+        auto& source = arr->at(0);
+        if (!source.is<t_hashmap>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(
+                runtime.context_active().current_frame().diag_info_from_position(),
+                0, t_hashmap(), source.type()));
             return {};
         }
 
@@ -278,14 +308,128 @@ namespace
             overwrite = flag.data<d_boolean, bool>();
         }
 
-        std::unordered_map<sqf::runtime::value, sqf::runtime::value> incoming;
-        if (!collect_pairs(runtime, arr->at(0), incoming)) { return {}; }
+        merge_into(left.data<d_hashmap>()->map(), source.data<d_hashmap>()->map(), overwrite);
+        return {};
+    }
 
-        auto& target = left.data<d_hashmap>()->map();
-        for (auto& it : incoming)
+
+    // keysArray createHashMapFromArray valuesArray
+    value createhashmapfromarray_array_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto keys = left.data<d_array>();
+        auto values = right.data<d_array>();
+        if (keys->size() != values->size())
         {
-            if (overwrite || target.find(it.first) == target.end()) { target[it.first] = it.second; }
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(
+                runtime.context_active().current_frame().diag_info_from_position(),
+                keys->size(), keys->size(), values->size()));
+            return {};
         }
+        std::unordered_map<sqf::runtime::value, sqf::runtime::value> hashmap;
+        for (size_t i = 0; i < keys->size(); i++) { hashmap[keys->at(i)] = values->at(i); }
+        return std::make_shared<d_hashmap>(hashmap);
+    }
+
+    // Reads [key, fallback, setDefault] the way both getOrDefault commands
+    // take it. Returns false when the shape is wrong and has already logged.
+    bool read_default_args(
+        runtime& runtime,
+        value::cref right,
+        sqf::runtime::value& key,
+        sqf::runtime::value& fallback,
+        bool& store)
+    {
+        auto arr = right.data<d_array>();
+        if (arr->size() < 2 || arr->size() > 3)
+        {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(
+                runtime.context_active().current_frame().diag_info_from_position(),
+                2, 3, arr->size()));
+            return false;
+        }
+        key = arr->at(0);
+        fallback = arr->at(1);
+        store = false;
+        if (arr->size() == 3)
+        {
+            auto& flag = arr->at(2);
+            if (!flag.is<t_boolean>())
+            {
+                runtime.__logmsg(err::ExpectedArrayTypeMissmatch(
+                    runtime.context_active().current_frame().diag_info_from_position(),
+                    2, t_boolean(), flag.type()));
+                return false;
+            }
+            store = flag.data<d_boolean, bool>();
+        }
+        return true;
+    }
+
+    // hashMap getOrDefault [key, defaultValue, setDefault]
+    value getordefault_hashmap_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        sqf::runtime::value key, fallback;
+        bool store;
+        if (!read_default_args(runtime, right, key, fallback, store)) { return {}; }
+
+        auto data = left.data<d_hashmap>();
+        auto found = data->map().find(key);
+        if (found != data->map().end()) { return found->second; }
+
+        if (store) { data->map()[key] = fallback; }
+        return fallback;
+    }
+
+    // Keeps what the default code returned, and writes it into the map first
+    // when the caller asked for that.
+    class behavior_default_call : public frame::behavior
+    {
+    private:
+        std::shared_ptr<d_hashmap> m_map;
+        sqf::runtime::value m_key;
+        bool m_store;
+    public:
+        behavior_default_call(std::shared_ptr<d_hashmap> map, sqf::runtime::value key, bool store)
+            : m_map(map), m_key(key), m_store(store) {}
+        virtual result enact(sqf::runtime::runtime& runtime, sqf::runtime::frame& frame) override
+        {
+            auto res = runtime.context_active().pop_value();
+            sqf::runtime::value produced = res.has_value() ? *res : sqf::runtime::value{};
+            if (m_store) { m_map->map()[m_key] = produced; }
+            runtime.context_active().push_value(produced);
+            return result::ok;
+        }
+    };
+
+    // hashMap getOrDefaultCall [key, defaultCode, setDefault]
+    // The code only runs when the key is missing, which is the whole point of
+    // the Call variant: building the default may be expensive.
+    value getordefaultcall_hashmap_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        sqf::runtime::value key, fallback;
+        bool store;
+        if (!read_default_args(runtime, right, key, fallback, store)) { return {}; }
+
+        auto data = left.data<d_hashmap>();
+        auto found = data->map().find(key);
+        if (found != data->map().end()) { return found->second; }
+
+        if (!fallback.is<t_code>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(
+                runtime.context_active().current_frame().diag_info_from_position(),
+                1, t_code(), fallback.type()));
+            return {};
+        }
+
+        frame f(
+            runtime.default_value_scope(),
+            fallback.data<d_code, instruction_set>(),
+            std::make_shared<behavior_default_call>(data, key, store));
+        // The key is what the code has to work from; passing it costs nothing
+        // for code that ignores _this.
+        f["_this"] = key;
+        runtime.context_active().push_frame(f);
         return {};
     }
 
@@ -372,7 +516,11 @@ void sqf::operators::ops_hashmap(::sqf::runtime::runtime& runtime)
     runtime.register_sqfop(unary("keys", t_hashmap(), "Returns the keys of a hashmap.", keys_hashmap));
     runtime.register_sqfop(unary("+", t_hashmap(), "Returns a copy of the hashmap.", plus_hashmap));
     runtime.register_sqfop(unary("values", t_hashmap(), "Returns the values of a hashmap.", values_hashmap));
-    runtime.register_sqfop(binary(4, "merge", t_hashmap(), t_array(), "Merges [source, overwriteExisting] into a hashmap.", merge_hashmap_array));
+    runtime.register_sqfop(binary(4, "merge", t_hashmap(), t_hashmap(), "Merges another hashmap in, keeping the keys this one already holds.", merge_hashmap_hashmap));
+    runtime.register_sqfop(binary(4, "merge", t_hashmap(), t_array(), "Merges [hashMap, overwriteExisting] into a hashmap.", merge_hashmap_array));
+    runtime.register_sqfop(binary(4, "createHashMapFromArray", t_array(), t_array(), "Creates a hashmap from a keys array and a values array.", createhashmapfromarray_array_array));
+    runtime.register_sqfop(binary(4, "getOrDefault", t_hashmap(), t_array(), "Returns the value at [key, defaultValue, setDefault], or the default.", getordefault_hashmap_array));
+    runtime.register_sqfop(binary(4, "getOrDefaultCall", t_hashmap(), t_array(), "Returns the value at [key, defaultCode, setDefault], running the code only when the key is missing.", getordefaultcall_hashmap_array));
     runtime.register_sqfop(unary("createHashMapObject", t_array(), "Creates a hashmap object from [prototype, argsForCreate].", createhashmapobject_array));
     runtime.register_sqfop(binary(4, "call", t_hashmap(), t_array(), "Calls a method of a hashmap object with [methodName, arguments].", call_hashmap_array));
 }

@@ -12,6 +12,7 @@
 #include "../runtime/d_array.h"
 #include "../runtime/diagnostics/d_stacktrace.h"
 #include "../runtime/d_code.h"
+#include "ops_hashmap.h"
 #include "d_text.h"
 #include "../runtime/git_sha1.h"
 
@@ -176,8 +177,26 @@ namespace
     {
         return right.type().to_string();
     }
+    // A hashmap object may customise its own str() output via a "#str"
+    // method; the reference requires it return a String. Running it means
+    // pushing a frame - to_string_sqf() has no access to the runtime and
+    // cannot call SQF code - so this is the one place plain data
+    // serialisation is not enough and str needs its own operator body
+    // rather than a virtual method override.
     value str_any(runtime& runtime, value::cref right)
     {
+        if (right.is<t_hashmap>())
+        {
+            auto& map = right.data<sqf::types::d_hashmap>()->map();
+            auto found = map.find(value(std::string("#str")));
+            if (found != map.end() && found->second.is<t_code>())
+            {
+                frame f(runtime.default_value_scope(), found->second.data<d_code, instruction_set>());
+                f["_self"] = right;
+                runtime.context_active().push_frame(f);
+                return {};
+            }
+        }
         return right.data()->to_string_sqf();
     }
     value nil_(runtime& runtime)

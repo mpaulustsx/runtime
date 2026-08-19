@@ -28,5 +28,8 @@
         private _hashmap = createHashMap;
         private _array = _hashmap getOrDefault ["key", [], true];
         [count _array, "key" in _hashmap]
-    } ], [0, true]]
+    } ], [0, true]],
+    ["assertTrue",	["defaultValue is optional per the reference and defaults to nil", {
+        isNil { (createHashMapFromArray [["a", 1]]) getOrDefault ["missing"] }
+    } ] ]
 ]

@@ -207,6 +207,17 @@ namespace
     {
         return {};
     }
+    // Environment predicates SQF-VM has no real engine session to answer
+    // from. There is exactly one process running the whole script, so it
+    // plays every role that process would: it acts as the server (server-
+    // only init has to run for anything to be there to test), it is not a
+    // dedicated server or a multiplayer session (both imply other machines
+    // that plainly do not exist here), and it has no player interface
+    // (nothing here is rendering a display).
+    value isserver_(runtime& runtime) { return true; }
+    value isdedicated_(runtime& runtime) { return false; }
+    value ismultiplayer_(runtime& runtime) { return false; }
+    value hasinterface_(runtime& runtime) { return false; }
     value if_bool(runtime& runtime, value::cref right)
     {
         return std::make_shared<d_if>(right.data_try<d_boolean, bool>(false));
@@ -773,6 +784,16 @@ namespace
 
             if (a.is<t_array>())
             {
+                // Compares the SUB-ARRAYS' elements, not a and b themselves -
+                // a and b are the two outer arrays and are always t_array
+                // here, so checking a.is<t_string>() / a.is<t_scalar>() (as
+                // this did before) never matched, the loop body never ran,
+                // and every pair of arrays compared equal, ALWAYS returning
+                // the same fixed boolean. A comparator that returns true for
+                // comp(a, a) breaks std::sort's irreflexivity requirement,
+                // which is undefined behaviour and, in practice, corrupts the
+                // sort into invalid memory access - this line is a genuine
+                // crash fix, not just a correctness one.
                 auto a_arr = a.data<d_array>()->value();
                 auto b_arr = b.data<d_array>()->value();
 
@@ -781,18 +802,21 @@ namespace
                     const auto& a_elem = a_arr[idx];
                     const auto& b_elem = b_arr[idx];
 
-                    if (a.is<t_string>())
+                    if (a_elem.is<t_string>())
                     {
                         if (a_elem.data<d_string, std::string>() < b_elem.data<d_string, std::string>()) return sort_flag;
                         if (a_elem.data<d_string, std::string>() > b_elem.data<d_string, std::string>()) return !sort_flag;
                     }
-                    else if (a.is<t_scalar>())
+                    else if (a_elem.is<t_scalar>())
                     {
                         if (a_elem.data<d_scalar, float>() < b_elem.data<d_scalar, float>()) return sort_flag;
                         if (a_elem.data<d_scalar, float>() > b_elem.data<d_scalar, float>()) return !sort_flag;
                     }
                 }
-                return !sort_flag;
+                // Every compared element was equal - the same "equal compares
+                // as false" rule the plain string/scalar cases below use,
+                // needed for the same reason: comp(a, a) must be false.
+                return false;
             }
             else if (a.is<t_string>())
             {
@@ -2238,6 +2262,10 @@ void sqf::operators::ops_generic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(unary("sleep", t_scalar(), "Suspends code execution for given time in seconds. The delay given is the minimal delay expected.", sleep_scalar));
     runtime.register_sqfop(unary("uiSleep", t_scalar(), "Suspends code execution for given time in seconds. The delay given is the minimal delay expected.", sleep_scalar));
     runtime.register_sqfop(nular("canSuspend", "Returns true if sleep, uiSleep or waitUntil commands can be used in current scope.", cansuspend_));
+    runtime.register_sqfop(nular("isServer", "Always true here: one process plays every role, and server-only init has to run for there to be anything to test.", isserver_));
+    runtime.register_sqfop(nular("isDedicated", "Always false here: there is no separate dedicated-server machine.", isdedicated_));
+    runtime.register_sqfop(nular("isMultiplayer", "Always false here: this is a single local session, not a networked one.", ismultiplayer_));
+    runtime.register_sqfop(nular("hasInterface", "Always false here: nothing is rendering a player display.", hasinterface_));
     runtime.register_sqfop(unary("loadFile", t_string(), "", loadfile_string));
     runtime.register_sqfop(unary("preprocessFileLineNumbers", t_string(), "Reads and processes the content of the specified file. Preprocessor is C-like, supports comments using // or /* and */ and PreProcessor Commands.", preprocessfile_string));
     runtime.register_sqfop(unary("preprocessFile", t_string(), "Reads and processes the content of the specified file. Preprocessor is C-like, supports comments using // or /* and */ and PreProcessor Commands.", preprocessfile_string));

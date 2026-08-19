@@ -23,6 +23,19 @@ namespace sqf::opcodes
             auto& context = vm.context_active();
 
             auto right_value = vm.context_active().pop_value();
+                // A binary/unary call that cannot run - the operand itself
+                // produced nothing, the operand is nil, or no overload
+                // matches - pushes an explicit nil rather than nothing at
+                // all. Returning with no push here silently changes the
+                // depth of the value stack: whatever consumes this
+                // operator's result then pops a value some EARLIER,
+                // unrelated instruction pushed, and the interpreter derails
+                // from there with a "no value found" error far from the
+                // real cause. A script hitting a type mismatch has to keep
+                // producing nil, the same way it does in the real engine,
+                // for code like `if (isNil "_x") exitWith {...}` -
+                // Vindicta's own documented way of tolerating optional
+                // content that may not be there - to work at all.
             if (!right_value.has_value())
             {
                 if (context.weak_error_handling())
@@ -33,11 +46,13 @@ namespace sqf::opcodes
                 {
                     vm.__logmsg(logmessage::runtime::NoValueFoundForRightArgument(diag_info()));
                 }
+                context.push_value({});
                 return;
             }
             else if (right_value->is<sqf::types::t_nothing>())
             {
                 vm.__logmsg(logmessage::runtime::NilValueFoundForRightArgumentWeak(diag_info()));
+                context.push_value({});
                 return;
             }
             
@@ -49,6 +64,7 @@ namespace sqf::opcodes
                 if (!vm.sqfop_exists(key))
                 {
                     vm.__logmsg(logmessage::runtime::UnknownInputTypeCombinationUnary(diag_info(), key.name, tright));
+                    context.push_value({});
                     return;
                 }
             }

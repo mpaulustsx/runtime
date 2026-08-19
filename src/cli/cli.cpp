@@ -38,6 +38,39 @@
 #define CMDADD(TYPE, NAME, ...) TYPE NAME(__VA_ARGS__); cmd.add(NAME)
 
 
+// Resolves an -i/--input-sqf/--input-config file's own virtual directory
+// the same way a file reached through #include gets one - by matching it
+// against a mounted -v prefix - so its own relative includes have something
+// to resolve against. Longest physical prefix wins, matching how a real
+// filesystem mount table would pick between overlapping mounts. Falls back
+// to "/" for a file outside every mount rather than leaving it unresolved.
+std::string cli::virtual_path_for(const std::filesystem::path& physical) const
+{
+    auto absolute = std::filesystem::absolute(physical).lexically_normal();
+    auto directory = absolute.has_filename() ? absolute.parent_path() : absolute;
+
+    const std::filesystem::path* bestPhys = nullptr;
+    const std::filesystem::path* bestVirt = nullptr;
+    size_t bestLength = 0;
+    for (auto& [phys, virt] : m_virtual_mappings)
+    {
+        auto rel = directory.lexically_relative(phys);
+        if (rel.empty() || rel.native().rfind("..", 0) == 0) { continue; }
+        auto length = phys.native().length();
+        if (length >= bestLength)
+        {
+            bestLength = length;
+            bestPhys = &phys;
+            bestVirt = &virt;
+        }
+    }
+    if (bestPhys == nullptr) { return "/"; }
+
+    auto remainder = directory.lexically_relative(*bestPhys);
+    auto result = (*bestVirt / remainder).generic_string();
+    return result.empty() ? "/" : result;
+}
+
 void cli::handle_files()
 {
     for (auto& [key, generators] : m_files)
@@ -47,19 +80,20 @@ void cli::handle_files()
             auto [path, contents] = generator();
             if (key == "sqf")
             {
+                sqf::runtime::fileio::pathinfo info{ path.string(), virtual_path_for(path) };
                 if (verbose()) { std::cout << "Preprocessing file '" << path << "'" << std::endl; }
-                auto ppedStr = m_runtime.parser_preprocessor().preprocess(m_runtime, contents, { path.string(), {} });
+                auto ppedStr = m_runtime.parser_preprocessor().preprocess(m_runtime, contents, info);
                 if (ppedStr.has_value())
                 {
                     if (verbose()) { std::cout << "Parsing file '" << path << "'" << std::endl; }
                     if (m_parse_only)
                     {
-                        auto success = m_runtime.parser_sqf().check_syntax(m_runtime, *ppedStr, { path.string(), {} });
+                        auto success = m_runtime.parser_sqf().check_syntax(m_runtime, *ppedStr, info);
                         m_good = m_good && success;
                     }
                     else
                     {
-                        auto set = m_runtime.parser_sqf().parse(m_runtime, *ppedStr, { path.string(), {} });
+                        auto set = m_runtime.parser_sqf().parse(m_runtime, *ppedStr, info);
                         if (set.has_value())
                         {
                             auto context = m_runtime.context_create().lock();
@@ -83,19 +117,20 @@ void cli::handle_files()
             }
             else if (key == "config")
             {
+                sqf::runtime::fileio::pathinfo info{ path.string(), virtual_path_for(path) };
                 if (verbose()) { std::cout << "Preprocessing file '" << path << "'" << std::endl; }
-                auto ppedStr = m_runtime.parser_preprocessor().preprocess(m_runtime, contents, { path.string(), {} });
+                auto ppedStr = m_runtime.parser_preprocessor().preprocess(m_runtime, contents, info);
                 if (ppedStr.has_value())
                 {
                     if (verbose()) { std::cout << "Parsing file '" << path << "'" << std::endl; }
                     if (m_parse_only)
                     {
-                        auto success = !m_runtime.parser_config().check_syntax(*ppedStr, { path.string(), {} });
+                        auto success = !m_runtime.parser_config().check_syntax(*ppedStr, info);
                         m_good = m_good && !success;
                     }
                     else
                     {
-                        auto success = m_runtime.parser_config().parse(m_runtime.confighost(), *ppedStr, { path.string(), {} });
+                        auto success = m_runtime.parser_config().parse(m_runtime.confighost(), *ppedStr, info);
                         if (!success)
                         {
                             m_good = false;
@@ -263,6 +298,9 @@ void cli::mount_filesystem(const std::vector<std::string>& mappings)
             continue;
         }
         m_runtime.fileio().add_mapping(phys.string(), virt.string());
+        m_virtual_mappings.emplace_back(
+            std::filesystem::absolute(phys).lexically_normal(),
+            virt.lexically_normal());
         if (verbose())
         {
             std::cout << "Mapped '" << virt << "' onto '" << phys << "'." << std::endl;

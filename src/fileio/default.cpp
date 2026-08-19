@@ -31,6 +31,35 @@ inline bool file_exists(std::filesystem::path p)
     return infile.good();
 }
 
+std::string sqf::fileio::impl_default::physical_to_virtual(std::filesystem::path physical) const
+{
+    auto absolute = std::filesystem::absolute(physical).lexically_normal();
+
+    const path_element* best = nullptr;
+    std::filesystem::path bestPhys;
+    size_t bestLength = 0;
+    for (auto& node : m_path_elements)
+    {
+        for (auto& phys : node->physical)
+        {
+            auto rel = absolute.lexically_relative(phys);
+            if (rel.empty() || rel.native().rfind("..", 0) == 0) { continue; }
+            auto length = phys.native().length();
+            if (length >= bestLength)
+            {
+                bestLength = length;
+                best = node.get();
+                bestPhys = phys;
+            }
+        }
+    }
+    if (best == nullptr) { return "/"; }
+
+    auto remainder = absolute.lexically_relative(bestPhys);
+    auto result = (std::filesystem::path(best->virtual_full) / remainder).generic_string();
+    return result.empty() ? "/" : result;
+}
+
 std::optional<sqf::runtime::fileio::pathinfo> sqf::fileio::impl_default::get_info_virtual(std::string_view viewVirtual, sqf::runtime::fileio::pathinfo current) const
 {
     // Create & Cleanse stuff
@@ -46,6 +75,37 @@ std::optional<sqf::runtime::fileio::pathinfo> sqf::fileio::impl_default::get_inf
     {
         log(logmessage::fileio::ResolveVirtualFileNotFound(current.physical, virt));
         return {};
+    }
+
+    // A relative include ("..\common.h") is resolved against the directory
+    // of the file that wrote it, on disk - the same thing any preprocessor
+    // means by "relative". This has to come before the tree walk below,
+    // which instead resolves relative to the CURRENT VIRTUAL path: that only
+    // works when every directory between the mounted root and the including
+    // file was itself given its own -v mapping, since the virtual tree only
+    // ever gains the nodes add_mapping was explicitly told about - it does
+    // not mirror the physical directory structure underneath a mount. A
+    // project mounted once at its root, the common case, would otherwise
+    // have every relative include from any file below top level fail: the
+    // first ".." pop already empties a one-node tree with nothing to land
+    // on. Falling through on a miss keeps the tree walk exactly as it was
+    // for the paths it is actually able to serve - virtual includes that
+    // still, deliberately, name no file on disk at the relative location.
+#if WIN32
+    bool isVirtualAbsolute = virt[0] == '/' || (virt.length() >= 2 && virt[1] == ':');
+#else
+    bool isVirtualAbsolute = virt[0] == '/';
+#endif
+    if (!isVirtualAbsolute && !current.physical.empty())
+    {
+        auto base = std::filesystem::path(current.physical);
+        auto baseDir = base.has_filename() ? base.parent_path() : base;
+        auto candidate = (baseDir / virt).lexically_normal();
+        if (file_exists(candidate))
+        {
+            log(logmessage::fileio::ResolveVirtualNavigateDown(current.physical, virt, candidate.string()));
+            return pathinfo{ candidate.string(), physical_to_virtual(candidate) };
+        }
     }
 
     // Prepare local tree-node list

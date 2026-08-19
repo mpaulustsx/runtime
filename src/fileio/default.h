@@ -44,6 +44,12 @@ namespace sqf::fileio
         /// <param name="current">The current pathinfo as available</param>
         /// <returns>empty optional on filenotfound or the pathinfo to the actual file.</returns>
         std::optional<sqf::runtime::fileio::pathinfo> get_info_virtual(std::string_view view, sqf::runtime::fileio::pathinfo current) const;
+        // Longest-physical-prefix match against every mounted node, mirroring
+        // add_mapping's own tree. Used to give a file resolved by physical
+        // path arithmetic (see get_info_virtual's relative-include fallback) a
+        // virtual identity, so ITS OWN later includes still have one to resolve
+        // relative to.
+        std::string physical_to_virtual(std::filesystem::path physical) const;
         /// <summary>
         /// Attempts to interpret the view provided as physical path.
         /// </summary>

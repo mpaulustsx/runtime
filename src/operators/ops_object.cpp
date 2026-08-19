@@ -1053,7 +1053,11 @@ namespace
         }
         auto scope = std::static_pointer_cast<value_scope>(obj->value());
         auto r = right.data<d_array>();
-        if (r->size() != 2)
+        // A third element is accepted the way real Arma accepts an
+        // isPublic broadcast flag here: there is no network to broadcast
+        // over in a single process, so it is read and otherwise ignored
+        // rather than rejected outright.
+        if (r->size() != 2 && r->size() != 3)
         {
             runtime.__logmsg(err::ExpectedArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, r->size()));
             return {};

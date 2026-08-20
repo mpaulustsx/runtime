@@ -10,10 +10,10 @@
 #define DLOPS_LIB_GETLASTERROR() dlerror()
 #define DLOPS_LIB_HANDLE void*
 #elif defined(_WIN32)
-#include <Windows.h>
+#include <windows.h>
 #define DLOPS_LIB_OPEN(P) LoadLibraryA(P)
 #define DLOPS_LIB_CLOSE(H) FreeLibrary(H)
-#define DLOPS_LIB_SYM(H, N) GetProcAddress(H, N)
+#define DLOPS_LIB_SYM(H, N) reinterpret_cast<void*>(GetProcAddress(H, N))
 #define DLOPS_LIB_GETLASTERROR() std::to_string(GetLastError())
 #define DLOPS_LIB_HANDLE HMODULE
 #else

@@ -3,7 +3,7 @@
 // & some headers requiring windows.h
 // If this was not here, a link conflict would emerge due to
 // windows.h including winsock1
-#include <WinSock2.h>
+#include <winsock2.h>
 #endif
 
 #include "ops_sqfvm.h"

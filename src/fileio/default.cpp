@@ -43,7 +43,7 @@ std::string sqf::fileio::impl_default::physical_to_virtual(std::filesystem::path
         for (auto& phys : node->physical)
         {
             auto rel = absolute.lexically_relative(phys);
-            if (rel.empty() || rel.native().rfind("..", 0) == 0) { continue; }
+            if (rel.empty() || rel.string().rfind("..", 0) == 0) { continue; }
             auto length = phys.native().length();
             if (length >= bestLength)
             {

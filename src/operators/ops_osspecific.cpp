@@ -8,7 +8,7 @@
 // & some headers requiring windows.h
 // If this was not here, a link conflict would emerge due to
 // windows.h including winsock1
-#include <Windows.h>
+#include <windows.h>
 #endif
 
 namespace err = logmessage::runtime;

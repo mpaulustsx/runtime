@@ -55,7 +55,7 @@ std::string cli::virtual_path_for(const std::filesystem::path& physical) const
     for (auto& [phys, virt] : m_virtual_mappings)
     {
         auto rel = directory.lexically_relative(phys);
-        if (rel.empty() || rel.native().rfind("..", 0) == 0) { continue; }
+        if (rel.empty() || rel.string().rfind("..", 0) == 0) { continue; }
         auto length = phys.native().length();
         if (length >= bestLength)
         {

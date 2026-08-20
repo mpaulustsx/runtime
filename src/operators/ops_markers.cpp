@@ -16,6 +16,24 @@ namespace err = logmessage::runtime;
 using namespace sqf::runtime;
 using namespace sqf::types;
 
+// Declared in ops_markers.h but never defined anywhere in this fork until
+// now - every marker-creating path needs a fresh instance to insert
+// (markers_storage::set() takes one by value, and .at() only looks up an
+// existing entry), so without this, createMarker/createMarkerLocal could
+// never actually construct a brand new marker at all.
+sqf::operators::markers_storage::marker::marker() :
+    mtext(""),
+    mtype("mil_dot"),
+    mcolor("ColorBlack"),
+    mbrush(""),
+    msize({ 1.0f, 1.0f }),
+    mpos({ 0.0f, 0.0f, 0.0f }),
+    malpha(1.0f),
+    mdirection(0.0f),
+    mshape(sqf::operators::markers_storage::marker::shape::Icon)
+{
+}
+
 namespace
 {
     value allmapmarkers_(runtime& runtime)
@@ -143,7 +161,18 @@ namespace
         auto arr = right.data<d_array>();
         std::array<float, 3> pos {0, 0, 0};
         std::string name;
-        if (arr->check_type(runtime, std::array<type, 2> { t_string(), t_object()}))
+        // Which overload this is gets decided by a plain, non-logging type
+        // probe first - check_type logs an ERR message on every mismatch,
+        // and any ERR message logged during this call marks the whole
+        // instruction as a runtime error regardless of what this function
+        // returns afterward (see runtime.cpp's post-instruction error
+        // check). Calling it speculatively on the branch that turns out
+        // not to apply used to poison an otherwise-successful call with a
+        // fatal error the moment position was passed as an array rather
+        // than an object - the more common of the two forms.
+        bool isObjectForm = arr->size() == 2 && arr->at(0).is<t_string>() && arr->at(1).is<t_object>();
+        bool isArrayForm = arr->size() == 2 && arr->at(0).is<t_string>() && arr->at(1).is<t_array>();
+        if (isObjectForm)
         {
             name = arr->at(0).data<d_string, std::string>();
             auto objdata = arr->at(1).data<d_object>();
@@ -157,23 +186,24 @@ namespace
             auto tmp = obj->position();
             pos = std::array<float, 3> { static_cast<float>(tmp.x), static_cast<float>(tmp.y), static_cast<float>(tmp.z)};
         }
-        else if (arr->check_type(runtime, std::array<type, 2> { t_string(), t_array() }))
+        else if (isArrayForm)
         {
             name = arr->at(0).data<d_string, std::string>();
             auto tmpArr = arr->at(1).data<d_array>();
+            if (!tmpArr->check_type(runtime, t_scalar(), 2, 3))
+            {
+                return {};
+            }
             pos = std::array<float, 3>
             {
                 tmpArr->at(0).data<d_scalar, float>(),
                 tmpArr->at(1).data<d_scalar, float>(),
                 tmpArr->size() > 2 ? tmpArr->at(2).data<d_scalar, float>() : 0
             };
-            if (!arr->check_type(runtime, t_scalar(), 2, 3))
-            {
-                return {};
-            }
         }
         else
         {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, arr->size()));
             return {};
         }
         if (runtime.storage<sqf::operators::markers_storage>().exists(name))
@@ -182,6 +212,13 @@ namespace
             runtime.__logmsg(err::ReturningEmptyString(runtime.context_active().current_frame().diag_info_from_position()));
             return "";
         }
+        // .at() looks up an EXISTING entry (throws std::out_of_range
+        // otherwise) - every other marker function here correctly only
+        // calls it after confirming the marker exists, but this one is
+        // creating a brand new marker, so it has to insert first via the
+        // storage's own set() (its only insertion path) before it can hold
+        // a reference to modify.
+        runtime.storage<sqf::operators::markers_storage>().set(name, sqf::operators::markers_storage::marker());
         auto& marker = runtime.storage<sqf::operators::markers_storage>().at(name);
         marker.set_pos(pos);
         return name;

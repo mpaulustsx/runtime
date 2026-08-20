@@ -8,6 +8,7 @@
 #include "../runtime/d_code.h"
 #include "../runtime/d_array.h"
 #include "d_text.h"
+#include "ops_hashmap.h"
 
 #include "../runtime/value.h"
 
@@ -232,7 +233,8 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "==", t_control(), t_control(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(3, "==", t_location(), t_location(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(3, "==", t_boolean(), t_boolean(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
-    
+    runtime.register_sqfop(binary(3, "==", t_hashmap(), t_hashmap(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
+
     runtime.register_sqfop(binary(3, "!=", t_scalar(), t_scalar(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_side(), t_side(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_string(), t_string(), "Returns whether one value is not equal to another.", notequals_any_any));
@@ -243,6 +245,7 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "!=", t_display(), t_display(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_control(), t_control(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_location(), t_location(), "Returns whether one value is not equal to another.", notequals_any_any));
+    runtime.register_sqfop(binary(3, "!=", t_hashmap(), t_hashmap(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(4, "isEqualTo", t_any(), t_any(), "Check if one value is equal to another. Both values need to be of the same type.", isequalto_any_any));
     runtime.register_sqfop(binary(4, "isNotEqualTo", t_any(), t_any(), "Check if one value is not equal to another. Both values need to be of the same type.", isnotequalto_any_any));
     runtime.register_sqfop(binary(4, "isEqualType", t_any(), t_any(), "Compares 2 values by their type. A much faster alternative to typeName a == typeName b.", isequaltype_any_any));

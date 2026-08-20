@@ -1267,7 +1267,10 @@ namespace
         return std::make_shared<d_object>(agent);
     }
 
-    value remoteexec_array_array(runtime& runtime, value::cref left, value::cref right)
+    // Shared by both the binary form (args left, ["funcName", target, jip]
+    // right) and the unary form (["funcName", target, jip] right only,
+    // _this defaults to []) - real remoteExec/remoteExecCall support both.
+    value remoteexec_impl(runtime& runtime, value::cref this_, value::cref right)
     {
         auto r = right.data<d_array>();
         if (r->size() < 1)
@@ -1291,12 +1294,237 @@ namespace
         {
             // Unknown or non-code function name - nothing to run, same as
             // real remoteExec silently doing nothing for a target with no
-            // matching JIP data.
+            // matching JIP data (and the empty-funcname JIP-cancel idiom
+            // some scripted code uses).
             return {};
         }
         frame f = { runtime.default_value_scope(), func->data<d_code, instruction_set>() };
-        f["_this"] = left;
+        f["_this"] = this_;
         runtime.context_active().push_frame(f);
+        return {};
+    }
+
+    value remoteexec_array_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        return remoteexec_impl(runtime, left, right);
+    }
+
+    value remoteexec_array(runtime& runtime, value::cref right)
+    {
+        return remoteexec_impl(runtime, std::make_shared<d_array>(), right);
+    }
+
+    // = = = = = Second batch, graduated from ops_dummy_*.cpp = = = = =
+    // Same minimal-but-real bar as the batch above.
+
+    value getplayeruid_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            return std::string("");
+        }
+        // Real Arma's UID is a stable Steam/BattlEye identity string, none
+        // of which exists in this single-process headless engine. A
+        // non-player object always gets "" (the real, documented
+        // behavior); the one modeled player gets a fixed, deterministic
+        // id so scripted code that stores/looks up "the player's UID" sees
+        // the same value on every call within a run.
+        auto& storage = runtime.storage<object::object_storage>();
+        if (obj->value() == storage.player())
+        {
+            return std::string("sqfvm-headless-player");
+        }
+        return std::string("");
+    }
+
+    value owner_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            return 0.0f;
+        }
+        // No network in this single-process VM - every object is
+        // effectively owned by the one machine running it. 2 matches the
+        // "server/creator" convention scripted code in this project's own
+        // codebase already checks for (e.g. PlayerDatabaseServer.sqf).
+        return 2.0f;
+    }
+
+    value removeeventhandler_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        // Soft/no-throw validation throughout (Weak log variants, manual
+        // checks instead of d_array::check_type's strong ones) rather than
+        // the hard array-contract check addEventHandler below still uses -
+        // this fork's own CBA_fnc_addBISEventHandler callers (undefined
+        // under SQF-VM, so every id they'd have stored is nil) end up
+        // calling this with a malformed id already; removing nothing is
+        // the same safe no-op remove_event_handler already gives a
+        // not-found id, matching removeAction's precedent above.
+        auto arr = right.data<d_array>();
+        if (arr->size() < 2)
+        {
+            runtime.__logmsg(err::ExpectedMinimumArraySizeMissmatchWeak(runtime.context_active().current_frame().diag_info_from_position(), 2, arr->size()));
+            return {};
+        }
+        if (!arr->at(1).is<t_scalar>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatchWeak(runtime.context_active().current_frame().diag_info_from_position(), 1, t_scalar(), arr->at(1).type()));
+            return {};
+        }
+        auto id = arr->at(1).data<d_scalar, float>();
+        obj->value()->remove_event_handler(static_cast<size_t>(id));
+        return {};
+    }
+
+    value addeventhandler_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto arr = right.data<d_array>();
+        if (arr->size() < 2 || !arr->at(0).is<t_string>() || !arr->at(1).is<t_code>())
+        {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatchWeak(runtime.context_active().current_frame().diag_info_from_position(), 2, 2, arr->size()));
+            return {};
+        }
+        // Stored well enough to round-trip a real id (removeEventHandler/
+        // removeAllEventHandlers below both depend on that), same as
+        // addAction above - nothing in this headless engine simulates the
+        // real triggers (damage, kills, GetIn/GetOut, ...) that would ever
+        // actually fire one.
+        auto id = obj->value()->add_event_handler(right);
+        return static_cast<float>(id);
+    }
+
+    value removealleventhandlers_object_string(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        // Real removeAllEventHandlers only clears handlers of the named
+        // type; this fork doesn't track a type per handler (see
+        // add_event_handler), so it clears all of them - the only
+        // observable difference is that a later removeEventHandler call
+        // for an unrelated type now has nothing left to remove either,
+        // which is already a safe no-op.
+        obj->value()->remove_all_event_handlers();
+        return {};
+    }
+
+    value isplayer_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            return false;
+        }
+        auto& storage = runtime.storage<object::object_storage>();
+        return obj->value() == storage.player();
+    }
+
+    value setunittrait_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto arr = right.data<d_array>();
+        if (arr->size() < 2)
+        {
+            runtime.__logmsg(err::ExpectedMinimumArraySizeMissmatchWeak(runtime.context_active().current_frame().diag_info_from_position(), 2, arr->size()));
+            return {};
+        }
+        if (!arr->at(0).is<t_string>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatchWeak(runtime.context_active().current_frame().diag_info_from_position(), 0, t_string(), arr->at(0).type()));
+            return {};
+        }
+        auto name = arr->at(0).data<d_string, std::string>();
+        obj->value()->set_trait(name, arr->at(1));
+        return {};
+    }
+
+    value getunittrait_object_string(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            return {};
+        }
+        auto name = right.data<d_string, std::string>();
+        auto val = obj->value()->trait(name);
+        if (!val.has_value())
+        {
+            return {};
+        }
+        return *val;
+    }
+
+    // remoteExecCall runs the same way remoteExec does above - the only
+    // real-Arma difference (bypassing the CfgRemoteExec allow-list) has no
+    // equivalent to bypass here, since nothing in this VM enforces one.
+    value localize_string(runtime& runtime, value::cref right)
+    {
+        // A real stringtable lookup needs mission-relative XML parsing this
+        // fork doesn't do. Returning the key itself - a genuine, common
+        // fallback real engines use for a string that can't be resolved -
+        // at least guarantees callers get a real STRING back instead of
+        // nil, which is what code doing e.g. `format [localize "STR_X", ...]`
+        // actually depends on to not fail its own type check.
+        return right.data<d_string, std::string>();
+    }
+
+    value nearestlocations_array(runtime& runtime, value::cref right)
+    {
+        // No terrain/location data is loaded in this headless engine (see
+        // nearRoads above for the same situation) - an empty result is the
+        // truthful answer, not a placeholder.
+        return std::make_shared<d_array>();
+    }
+
+    value backpack_object(runtime& runtime, value::cref right)
+    {
+        // No gear/inventory is simulated in this headless engine - "" (the
+        // real, documented return for an empty slot) is the truthful
+        // answer for every object here, not a placeholder.
+        return std::string("");
+    }
+
+    value date_(runtime& runtime)
+    {
+        // No mission calendar is modeled in this headless engine. A fixed,
+        // deterministic value beats nil - scripted code that just wants a
+        // real 5-element date array to read fields off of gets one.
+        return std::make_shared<d_array>(std::vector<value>{ 2024.0f, 1.0f, 1.0f, 12.0f, 0.0f });
+    }
+
+    value daytime_(runtime& runtime)
+    {
+        return 12.0f;
+    }
+
+    value publicvariable_string(runtime& runtime, value::cref right)
+    {
+        // No network in this single-process VM - there's nothing to
+        // broadcast to, the same simplification setVariable's isPublic
+        // flag and remoteExec's target argument already make elsewhere in
+        // this file.
         return {};
     }
 }
@@ -1369,4 +1597,31 @@ void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(4, "removeAction", t_object(), t_scalar(), "Removes an action added by addAction.", removeaction_object_scalar));
     runtime.register_sqfop(unary("createAgent", t_array(), "Creates a lightweight unit (no group, minimal AI) of the given classname type.", createagent_array));
     runtime.register_sqfop(binary(4, "remoteExec", t_array(), t_array(), "Executes a function on the specified target machine(s). There is no network in this single-process VM, so the named function is simply run locally; the target and isJIP arguments are accepted but ignored.", remoteexec_array_array));
+    runtime.register_sqfop(binary(4, "remoteExecCall", t_array(), t_array(), "Executes a function on the specified target machine(s). Behaves the same as remoteExec in this single-process VM.", remoteexec_array_array));
+    runtime.register_sqfop(unary("remoteExec", t_array(), "Executes a function on the specified target machine(s) with no arguments (_this = []). There is no network in this single-process VM, so the named function is simply run locally.", remoteexec_array));
+    runtime.register_sqfop(unary("remoteExecCall", t_array(), "Executes a function on the specified target machine(s) with no arguments (_this = []). Behaves the same as remoteExec in this single-process VM.", remoteexec_array));
+
+    // Second batch, graduated from ops_dummy_*.cpp - see the function definitions above.
+    runtime.register_sqfop(unary("getPlayerUID", t_object(), "Returns the UID of the given object, if it is the player. There is only ever one player object in this headless engine.", getplayeruid_object));
+    runtime.register_sqfop(unary("owner", t_object(), "Returns the network ID of the machine that owns the given object.", owner_object));
+    runtime.register_sqfop(binary(4, "removeEventHandler", t_object(), t_array(), "Removes an event handler added by addEventHandler.", removeeventhandler_object_array));
+    runtime.register_sqfop(binary(4, "addEventHandler", t_object(), t_array(), "Adds an event handler to the given object. No triggers are ever simulated in this headless engine, so a registered handler is stored well enough to round-trip a real id but never actually invoked.", addeventhandler_object_array));
+    runtime.register_sqfop(binary(4, "removeAllEventHandlers", t_object(), t_string(), "Removes all event handlers of the given type from the given object.", removealleventhandlers_object_string));
+    runtime.register_sqfop(unary("isPlayer", t_object(), "Checks whether the given object is the (theoretical) player object.", isplayer_object));
+    runtime.register_sqfop(binary(4, "setUnitTrait", t_object(), t_array(), "Sets a named unit trait to a given value. First element is expected to be the trait name as string, second element the value.", setunittrait_object_array));
+    runtime.register_sqfop(binary(4, "getUnitTrait", t_object(), t_string(), "Returns the value of a named unit trait, or nil if it was never set.", getunittrait_object_string));
+    runtime.register_sqfop(unary("localize", t_string(), "Returns the localized string of the given stringtable key. No stringtable is loaded in this headless engine, so the key itself is returned.", localize_string));
+    runtime.register_sqfop(unary("nearestLocations", t_array(), "Returns a list of locations near the given position of the given type(s). No terrain/location data is loaded in this headless engine, so this always returns an empty array.", nearestlocations_array));
+    runtime.register_sqfop(unary("backpack", t_object(), "Returns the classname of the object's backpack, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("goggles", t_object(), "Returns the classname of the unit's goggles, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("headgear", t_object(), "Returns the classname of the unit's headgear, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("hmd", t_object(), "Returns the classname of the unit's head-mounted display, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("primaryWeapon", t_object(), "Returns the classname of the unit's primary weapon, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("secondaryWeapon", t_object(), "Returns the classname of the unit's secondary weapon, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("uniform", t_object(), "Returns the classname of the unit's uniform, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("vest", t_object(), "Returns the classname of the unit's vest, or \"\" if it has none. No gear/inventory is simulated in this headless engine.", backpack_object));
+    runtime.register_sqfop(unary("getPosATL", t_object(), "Returns the object position in format PositionATL. No terrain is loaded in this headless engine, so ATL/AGL/ASL all mean the same thing position already returns.", position_object));
+    runtime.register_sqfop(nular("date", "Returns the current in-game date as an array [year, month, day, hour, minute]. No mission calendar is modeled in this headless engine, so a fixed date is returned.", date_));
+    runtime.register_sqfop(nular("daytime", "Returns the current in-game time of day as a decimal number of hours. No mission calendar is modeled in this headless engine, so a fixed value is returned.", daytime_));
+    runtime.register_sqfop(unary("publicVariable", t_string(), "Broadcasts a variable to all machines. No network exists in this single-process VM, so this is a no-op.", publicvariable_string));
 }

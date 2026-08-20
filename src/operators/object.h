@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <set>
 #include <utility>
+#include <optional>
 
 namespace sqf
 {
@@ -118,6 +119,9 @@ namespace sqf
             std::set<std::string> m_disabled_ai;
             std::vector<std::pair<size_t, ::sqf::runtime::value>> m_actions;
             size_t m_next_action_id = 0;
+            std::vector<std::pair<std::string, ::sqf::runtime::value>> m_traits;
+            std::vector<std::pair<size_t, ::sqf::runtime::value>> m_event_handlers;
+            size_t m_next_eh_id = 0;
 
             object(sqf::runtime::config config, bool is_vehicle);
             object(const object& obj) = delete;
@@ -182,6 +186,36 @@ namespace sqf
             size_t add_action(::sqf::runtime::value action) { auto id = m_next_action_id++; m_actions.push_back({ id, std::move(action) }); return id; }
             void remove_action(size_t id) { auto it = std::find_if(m_actions.begin(), m_actions.end(), [id](const auto& p) { return p.first == id; }); if (it != m_actions.end()) { m_actions.erase(it); } }
             const std::vector<std::pair<size_t, ::sqf::runtime::value>>& actions() const { return m_actions; }
+
+            /// <summary>
+            /// setUnitTrait/getUnitTrait storage - a handful of named
+            /// values at most per unit, so a linear scan (matching m_actions
+            /// above) beats pulling in a map for this.
+            /// </summary>
+            void set_trait(const std::string& name, ::sqf::runtime::value val)
+            {
+                auto it = std::find_if(m_traits.begin(), m_traits.end(), [&name](const auto& p) { return p.first == name; });
+                if (it != m_traits.end()) { it->second = std::move(val); }
+                else { m_traits.push_back({ name, std::move(val) }); }
+            }
+            std::optional<::sqf::runtime::value> trait(const std::string& name) const
+            {
+                auto it = std::find_if(m_traits.begin(), m_traits.end(), [&name](const auto& p) { return p.first == name; });
+                if (it == m_traits.end()) { return std::nullopt; }
+                return it->second;
+            }
+
+            /// <summary>
+            /// addEventHandler/removeEventHandler storage. Nothing in this
+            /// headless engine simulates the real triggers (damage, kills,
+            /// GetIn/GetOut, ...) that would fire one, so a handler is
+            /// stored well enough to round-trip a real id - the same
+            /// minimal-but-real bar add_action above holds to - but is
+            /// never actually invoked.
+            /// </summary>
+            size_t add_event_handler(::sqf::runtime::value handler) { auto id = m_next_eh_id++; m_event_handlers.push_back({ id, std::move(handler) }); return id; }
+            void remove_event_handler(size_t id) { auto it = std::find_if(m_event_handlers.begin(), m_event_handlers.end(), [id](const auto& p) { return p.first == id; }); if (it != m_event_handlers.end()) { m_event_handlers.erase(it); } }
+            void remove_all_event_handlers() { m_event_handlers.clear(); }
 
 
             /// <summary>

@@ -11,6 +11,8 @@
 #include <array>
 #include <vector>
 #include <algorithm>
+#include <set>
+#include <utility>
 
 namespace sqf
 {
@@ -106,6 +108,17 @@ namespace sqf
             soldiers_ m_soldiers;
             configuration_ m_configuration;
 
+            // Headless-appropriate state for the scripting surface below -
+            // no rendering, no real AI/physics, just what a script can set
+            // and read back. Given in-class defaults so object(...)'s
+            // constructor init-list doesn't need to mention them.
+            float m_direction = 0.0f;
+            bool m_captive = false;
+            bool m_allow_damage = true;
+            std::set<std::string> m_disabled_ai;
+            std::vector<std::pair<size_t, ::sqf::runtime::value>> m_actions;
+            size_t m_next_action_id = 0;
+
             object(sqf::runtime::config config, bool is_vehicle);
             object(const object& obj) = delete;
         public:
@@ -147,6 +160,28 @@ namespace sqf
 
             soldiers_ soldiers() { return m_soldiers; }
             const configuration_ configuration() const { return m_configuration; }
+
+            float direction() const { return m_direction; }
+            void direction(float val) { m_direction = val; }
+
+            bool captive() const { return m_captive; }
+            void captive(bool val) { m_captive = val; }
+
+            bool allow_damage() const { return m_allow_damage; }
+            void allow_damage(bool val) { m_allow_damage = val; }
+
+            bool ai_disabled(std::string_view feature) const { return m_disabled_ai.find(std::string(feature)) != m_disabled_ai.end(); }
+            void disable_ai(std::string feature) { m_disabled_ai.insert(std::move(feature)); }
+            void enable_ai(const std::string& feature) { m_disabled_ai.erase(feature); }
+
+            /// <summary>
+            /// Stores an addAction entry (its full argument array, exactly
+            /// as passed - nothing here ever actually shows or fires it,
+            /// there is no display to show it on) and returns a fresh id.
+            /// </summary>
+            size_t add_action(::sqf::runtime::value action) { auto id = m_next_action_id++; m_actions.push_back({ id, std::move(action) }); return id; }
+            void remove_action(size_t id) { auto it = std::find_if(m_actions.begin(), m_actions.end(), [id](const auto& p) { return p.first == id; }); if (it != m_actions.end()) { m_actions.erase(it); } }
+            const std::vector<std::pair<size_t, ::sqf::runtime::value>>& actions() const { return m_actions; }
 
 
             /// <summary>

@@ -1095,6 +1095,210 @@ namespace
             }
         }
     }
+
+    // = = = = = = = = Graduated from ops_dummy_*.cpp = = = = = = = =
+    // Headless-appropriate real implementations for commands this fork used
+    // to only warn-and-noop on. Each keeps the same minimal-but-real bar the
+    // rest of this file holds to: no rendering, no physics, no real AI or
+    // network - just state a script can set and read back faithfully.
+
+    value setdir_object_scalar(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        obj->value()->direction(right.data<d_scalar, float>());
+        return {};
+    }
+
+    value setcaptive_object_boolean(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        obj->value()->captive(right.data<d_boolean, bool>());
+        return {};
+    }
+
+    value allowdamage_object_boolean(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        obj->value()->allow_damage(right.data<d_boolean, bool>());
+        return {};
+    }
+
+    value disableai_object_string(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        obj->value()->disable_ai(right.data<d_string, std::string>());
+        return {};
+    }
+
+    value worldsize_(runtime& runtime)
+    {
+        // No terrain is loaded in this headless engine. Vindicta's own
+        // mission folder (Vindicta.Altis) targets Altis, so that is the
+        // size a script asking "how big is the map" should see.
+        return 15360.0f;
+    }
+
+    value nearroads_array_scalar(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto pos = left.data<d_array>();
+        if (!pos->check_type(runtime, t_scalar(), 2, 3))
+        {
+            return {};
+        }
+        // There is no road network modeled in this headless engine - an
+        // empty result is the truthful answer, not a placeholder.
+        return std::make_shared<d_array>();
+    }
+
+    value nearroads_object_scalar(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        return std::make_shared<d_array>();
+    }
+
+    value addaction_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto arr = right.data<d_array>();
+        if (arr->size() < 2)
+        {
+            runtime.__logmsg(err::ExpectedMinimumArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, arr->size()));
+            return {};
+        }
+        // Nothing in this headless engine ever shows or fires this action -
+        // there is no display to show it on - so it is only stored well
+        // enough for addAction/removeAction to round-trip a real id, which
+        // is what scripted code actually depends on.
+        auto id = obj->value()->add_action(right);
+        return static_cast<float>(id);
+    }
+
+    value removeaction_object_scalar(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto id = right.data<d_scalar, float>();
+        obj->value()->remove_action(static_cast<size_t>(id));
+        return {};
+    }
+
+    value createagent_array(runtime& runtime, value::cref right)
+    {
+        auto arr = right.data<d_array>();
+        if (!arr->check_type(runtime, std::array<sqf::runtime::type, 5>{ t_string(), t_array(), t_array(), t_scalar(), t_string() }))
+        {
+            return {};
+        }
+        auto type = arr->at(0).data<d_string, std::string>();
+        auto position = arr->at(1).data<d_array>();
+        if (!position->check_type(runtime, t_scalar(), 2, 3))
+        {
+            return {};
+        }
+        auto radius = arr->at(3).data<d_scalar, float>();
+        config conf;
+        if (runtime.configuration().enable_classname_check)
+        {
+            auto configBin = runtime.confighost().root();
+
+            auto cfgVehicles = configBin / "CfgVehicles";
+            if (cfgVehicles.empty())
+            {
+                runtime.__logmsg(err::ConfigEntryNotFoundWeak(runtime.context_active().current_frame().diag_info_from_position(), std::array<std::string, 2> { "ConfigBin" }, "CfgVehicles"));
+                return {};
+            }
+
+            auto opt = cfgVehicles / type;
+            if (opt.empty())
+            {
+                runtime.__logmsg(err::ConfigEntryNotFoundWeak(runtime.context_active().current_frame().diag_info_from_position(), std::array<std::string, 2> { "ConfigBin", "CfgVehicles" }, type));
+                return {};
+            }
+            else
+            {
+                conf = *opt;
+            }
+        }
+        auto agent = object::create(runtime, conf, false);
+        // Guard against radius == 0 - std::rand() % 0 is undefined behavior,
+        // and createAgent 0 (an exact spawn point, no scatter) is the
+        // common case for a mod placing a specific NPC.
+        float offX = radius > 0 ? static_cast<float>((std::rand() % static_cast<int>(radius * 2)) - radius) : 0.0f;
+        float offY = radius > 0 ? static_cast<float>((std::rand() % static_cast<int>(radius * 2)) - radius) : 0.0f;
+        agent->position({
+            position->at(0).data<d_scalar, float>() + offX,
+            position->at(1).data<d_scalar, float>() + offY,
+            position->size() > 2 ? position->at(2).data<d_scalar, float>() : 0.0f
+            });
+        return std::make_shared<d_object>(agent);
+    }
+
+    value remoteexec_array_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto r = right.data<d_array>();
+        if (r->size() < 1)
+        {
+            runtime.__logmsg(err::ExpectedMinimumArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 1, r->size()));
+            return {};
+        }
+        if (!r->at(0).is<t_string>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 0, t_string(), r->at(0).type()));
+            return {};
+        }
+        // Target machine and JIP (r->at(1)/r->at(2)) are read implicitly by
+        // being ignored: there is no network to route them over in a
+        // single-process VM, so the named function just runs here, the same
+        // simplification setVariable's isPublic flag already makes.
+        auto funcname = r->at(0).data<d_string, std::string>();
+        auto scope = runtime.default_value_scope();
+        auto func = scope->try_get(funcname);
+        if (!func.has_value() || !func->is<t_code>())
+        {
+            // Unknown or non-code function name - nothing to run, same as
+            // real remoteExec silently doing nothing for a target with no
+            // matching JIP data.
+            return {};
+        }
+        frame f = { runtime.default_value_scope(), func->data<d_code, instruction_set>() };
+        f["_this"] = left;
+        runtime.context_active().push_frame(f);
+        return {};
+    }
 }
 void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
 {
@@ -1151,4 +1355,18 @@ void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(4, "getVariable", t_object(), t_string(), "Return the value of variable in the variable space assigned to various data types. Returns nil if variable is undefined.", getVariable_object_string));
     runtime.register_sqfop(binary(4, "getVariable", t_object(), t_array(), "Return the value of variable in the provided variable space. First element is expected to be the variable name as string. Returns second array item if variable is undefined.", getVariable_object_array));
     runtime.register_sqfop(binary(4, "setVariable", t_object(), t_array(), "Sets a variable to given value in the provided variable space. First element is expected to be the variable name as string. Second element is expected to be anything.", setVariable_object_array));
+
+    // Graduated from ops_dummy_*.cpp - see the function definitions above.
+    runtime.register_sqfop(binary(4, "setDir", t_object(), t_scalar(), "Sets the direction in which the vehicle/person is facing.", setdir_object_scalar));
+    runtime.register_sqfop(binary(4, "setPosATL", t_object(), t_array(), "Sets object position. No terrain is loaded in this headless engine, so ATL/AGL/ASL all mean the same thing setPos already does.", setpos_object_array));
+    runtime.register_sqfop(binary(4, "setCaptive", t_object(), t_boolean(), "Sets whether the object is captive (won't be attacked by AI unless it fires back).", setcaptive_object_boolean));
+    runtime.register_sqfop(binary(4, "allowDamage", t_object(), t_boolean(), "Enables/disables damage handling for a unit.", allowdamage_object_boolean));
+    runtime.register_sqfop(binary(4, "disableAI", t_object(), t_string(), "Disables the specified AI feature.", disableai_object_string));
+    runtime.register_sqfop(nular("worldSize", "Returns the size of the world (map) in meters.", worldsize_));
+    runtime.register_sqfop(binary(4, "nearRoads", t_array(), t_scalar(), "Returns objects representing road parts. No road network is modeled in this headless engine, so this always returns an empty array.", nearroads_array_scalar));
+    runtime.register_sqfop(binary(4, "nearRoads", t_object(), t_scalar(), "Returns objects representing road parts. No road network is modeled in this headless engine, so this always returns an empty array.", nearroads_object_scalar));
+    runtime.register_sqfop(binary(4, "addAction", t_object(), t_array(), "Adds an item to the (script) action menu of the given object. There is no display in this headless engine to ever show it - this only stores it well enough for addAction/removeAction to round-trip a real id.", addaction_object_array));
+    runtime.register_sqfop(binary(4, "removeAction", t_object(), t_scalar(), "Removes an action added by addAction.", removeaction_object_scalar));
+    runtime.register_sqfop(unary("createAgent", t_array(), "Creates a lightweight unit (no group, minimal AI) of the given classname type.", createagent_array));
+    runtime.register_sqfop(binary(4, "remoteExec", t_array(), t_array(), "Executes a function on the specified target machine(s). There is no network in this single-process VM, so the named function is simply run locally; the target and isJIP arguments are accepted but ignored.", remoteexec_array_array));
 }

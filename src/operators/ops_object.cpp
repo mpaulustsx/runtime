@@ -19,6 +19,7 @@
 #include "object.h"
 #include "d_object.h"
 #include "group.h"
+#include <cmath>
 #include "d_group.h"
 #include "d_side.h"
 
@@ -1527,6 +1528,80 @@ namespace
         // this file.
         return {};
     }
+
+    // inArea - unlike nearRoads/nearestLocations above, this is real,
+    // computable geometry, not a "nothing is modeled" stub: every call site
+    // in Vindicta uses the array-shape form (center, a, b, angle,
+    // isRectangle[, height]), never a marker name, so only that form needs
+    // support. Height (the array's optional 6th element) is always -1
+    // (infinite) at every call site, and inArea is a ground/screen-plane
+    // (2D) test in real Arma regardless, so Z is never consulted here.
+    bool inarea_check(runtime& runtime, float px, float py, value::cref right)
+    {
+        auto shape = right.data<d_array>();
+        if (shape->size() < 5)
+        {
+            runtime.__logmsg(err::ExpectedMinimumArraySizeMissmatchWeak(runtime.context_active().current_frame().diag_info_from_position(), 5, shape->size()));
+            return false;
+        }
+        if (!shape->at(0).is<t_array>())
+        {
+            return false;
+        }
+        auto center = shape->at(0).data<d_array>();
+        if (center->size() < 2)
+        {
+            return false;
+        }
+        auto cx = center->at(0).data<d_scalar, float>();
+        auto cy = center->at(1).data<d_scalar, float>();
+        auto a = shape->at(1).data<d_scalar, float>();
+        auto b = shape->at(2).data<d_scalar, float>();
+        auto angledeg = shape->at(3).data<d_scalar, float>();
+        auto isrect = shape->at(4).data<d_boolean, bool>();
+        if (a <= 0.0f || b <= 0.0f)
+        {
+            return false;
+        }
+        // Rotate the world-space delta into the shape's own (unrotated)
+        // frame - inverse of the clockwise-from-north rotation Arma uses
+        // for marker/trigger/area angles.
+        float dx = px - cx;
+        float dy = py - cy;
+        float rad = angledeg * 3.14159265358979323846f / 180.0f;
+        float c = std::cos(rad);
+        float s = std::sin(rad);
+        float lx = dx * c - dy * s;
+        float ly = dx * s + dy * c;
+        if (isrect)
+        {
+            return std::abs(lx) <= a && std::abs(ly) <= b;
+        }
+        float nx = lx / a;
+        float ny = ly / b;
+        return (nx * nx + ny * ny) <= 1.0f;
+    }
+
+    value inarea_array_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto pos = left.data<d_array>();
+        if (pos->size() < 2)
+        {
+            return false;
+        }
+        return inarea_check(runtime, pos->at(0).data<d_scalar, float>(), pos->at(1).data<d_scalar, float>(), right);
+    }
+
+    value inarea_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            return false;
+        }
+        auto pos = obj->value()->position();
+        return inarea_check(runtime, pos.x, pos.y, right);
+    }
 }
 void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
 {
@@ -1624,4 +1699,6 @@ void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(nular("date", "Returns the current in-game date as an array [year, month, day, hour, minute]. No mission calendar is modeled in this headless engine, so a fixed date is returned.", date_));
     runtime.register_sqfop(nular("daytime", "Returns the current in-game time of day as a decimal number of hours. No mission calendar is modeled in this headless engine, so a fixed value is returned.", daytime_));
     runtime.register_sqfop(unary("publicVariable", t_string(), "Broadcasts a variable to all machines. No network exists in this single-process VM, so this is a no-op.", publicvariable_string));
+    runtime.register_sqfop(binary(4, "inArea", t_array(), t_array(), "Checks whether a position is inside the given area (array-shape form: [center, a, b, angle, isRectangle]).", inarea_array_array));
+    runtime.register_sqfop(binary(4, "inArea", t_object(), t_array(), "Checks whether an object's position is inside the given area (array-shape form: [center, a, b, angle, isRectangle]).", inarea_object_array));
 }

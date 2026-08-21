@@ -3,6 +3,7 @@
 #include "../runtime/value.h"
 #include "../runtime/type.h"
 #include "../runtime/d_array.h"
+#include "../runtime/d_string.h"
 #include "d_object.h"
 
 using namespace sqf::runtime;
@@ -29,7 +30,13 @@ void sqf::operators::ops_dummy_nular(sqf::runtime::runtime& runtime)
 	runtime.register_sqfop(nular("teamswitchenabled", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "teamswitchenabled")); return {}; }));
 	runtime.register_sqfop(nular("visiblescoretable", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "visiblescoretable")); return {}; }));
 	runtime.register_sqfop(nular("is3denmultiplayer", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "is3denmultiplayer")); return {}; }));
-	runtime.register_sqfop(nular("worldname", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "worldname")); return {}; }));
+	// worldName returning nil (instead of a real string) makes any comparison
+	// against it collapse to nil rather than a bool (SQF's relational ops
+	// don't produce a bool when either side is nil), so code paths that
+	// branch on `if (... != worldName) then {...}` silently never take the
+	// branch under SQF-VM. Real Arma always returns a real world name, so
+	// stand in with a stable placeholder rather than leaving this nil.
+	runtime.register_sqfop(nular("worldname", "", [](sqf::runtime::runtime&) -> value { return value(std::string("vr")); }));
 	runtime.register_sqfop(nular("ismultiplayersolo", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "ismultiplayersolo")); return {}; }));
 	runtime.register_sqfop(nular("isremoteexecuted", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "isremoteexecuted")); return {}; }));
 	runtime.register_sqfop(nular("curatorcamera", "", [](sqf::runtime::runtime& runtime) -> value { runtime.__logmsg(logmessage::runtime::WarningMessage(runtime.context_active().current_frame().diag_info_from_position(), "NOT IMPLEMENTED", "curatorcamera")); return {}; }));

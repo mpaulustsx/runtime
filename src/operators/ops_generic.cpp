@@ -318,6 +318,10 @@ namespace
                     auto value = res->data_try<d_boolean, bool>();
                     if (value.has_value())
                     {
+                        // waitUntil always evaluates to nil - see the matching
+                        // comment on behavior_while_exit::enact for why this
+                        // push is needed.
+                        runtime.context_active().push_value({});
                         return result::ok;
                     }
                     else
@@ -328,6 +332,7 @@ namespace
                 else if (m_count > 30000 && runtime.context_active().can_suspend())
                 {
                     runtime.__logmsg(logmessage::runtime::WaitUntilMaxLoopReached(frame.diag_info_from_position()));
+                    runtime.context_active().push_value({});
                     return result::ok;
                 }
                 else
@@ -1114,7 +1119,19 @@ namespace
                 {
                     m_switched = true;
                     auto dswitch = frame[d_switch::magic].data_try<d_switch>();
-                    return dswitch ? (dswitch->target_code().empty() ? result::ok : result::exchange) : result::fail;
+                    if (!dswitch)
+                    {
+                        return result::fail;
+                    }
+                    if (dswitch->target_code().empty())
+                    {
+                        // No case matched and there's no default: - switch
+                        // still evaluates to nil, same rationale as the
+                        // while/for/forEach fix (see behavior_while_exit::enact).
+                        runtime.context_active().push_value({});
+                        return result::ok;
+                    }
+                    return result::exchange;
                 }
                 else
                 {
@@ -1308,7 +1325,10 @@ namespace
         }
         auto oldval = (*arr)[index];
         (*arr)[index] = val;
-        if (!arr->recursion_test())
+        // Only a nested ARRAY can ever introduce a cycle (see d_array.h's
+        // push_back for the same reasoning) - skip the full-array scan for
+        // a plain scalar/string/bool/object/nil set.
+        if (val.is<t_array>() && !arr->recursion_test())
         {
             (*arr)[index] = oldval;
             runtime.__logmsg(err::ArrayRecursion(runtime.context_active().current_frame().diag_info_from_position()));
@@ -1351,7 +1371,19 @@ namespace
     {
         auto arr = left.data<d_array>();
         auto r = right.data<d_array>();
+        auto oldsize = arr->size();
+        // `arr` is already known cycle-free going in, so appending can only
+        // introduce a new cycle if one of the newly-appended elements is
+        // itself an ARRAY (same reasoning as push_back/set above) - skip the
+        // full-array scan otherwise.
+        bool could_cycle = std::any_of(r->begin(), r->end(), [](value::cref v) { return v.is<t_array>(); });
         arr->insert(arr->end(), r->begin(), r->end());
+        if (could_cycle && !arr->recursion_test())
+        {
+            arr->erase(arr->begin() + oldsize, arr->end());
+            runtime.__logmsg(err::ArrayRecursion(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
         return {};
     }
     value arrayintersect_array_array(runtime& runtime, value::cref left, value::cref right)

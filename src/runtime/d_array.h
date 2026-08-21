@@ -92,8 +92,21 @@ namespace sqf
             template<typename TIterator>
             d_array(TIterator begin, TIterator end) : m_value(begin, end) {}
 
+            // Guards against self- or cross-referential array graphs recursing
+            // without bound - same rationale as to_string_sqf()'s guard above
+            // (see its comment). A cycle just gets copied shallow (the
+            // reference to the in-progress array is reused as-is) instead of
+            // being expanded forever.
             std::shared_ptr<d_array> copy_deep() const
             {
+                thread_local std::vector<const d_array*> s_copy_deep_in_progress;
+                if (std::find(s_copy_deep_in_progress.begin(), s_copy_deep_in_progress.end(), this) != s_copy_deep_in_progress.end())
+                {
+                    // Cheat: we can't return `this` here (not a shared_ptr
+                    // we own), so break the cycle with an empty array.
+                    return std::make_shared<d_array>();
+                }
+                s_copy_deep_in_progress.push_back(this);
                 std::vector<sqf::runtime::value> copy;
                 for (auto& val : m_value)
                 {
@@ -106,6 +119,7 @@ namespace sqf
                         copy.emplace_back(val.data());
                     }
                 }
+                s_copy_deep_in_progress.pop_back();
                 return std::make_shared<d_array>(copy);
             }
 
@@ -183,7 +197,23 @@ namespace sqf
             iterator insert(iterator start, TIterator begin, TIterator end) { return m_value.insert(start, begin, end); }
 
             //#TODO emplace back
-            bool push_back(sqf::runtime::value val) { m_value.push_back(std::move(val)); if (!recursion_test()) { m_value.pop_back(); return false; } return true; }
+            // recursion_test() only ever finds a cycle through a nested
+            // ARRAY (see recursion_test_() above, which only descends into
+            // t_array elements) - a scalar/string/bool/object/nil push can
+            // never introduce one. Skipping the full-array scan for those
+            // turns repeated pushBack from O(n^2) into O(n) for the common
+            // case of building an array of plain values.
+            bool push_back(sqf::runtime::value val)
+            {
+                bool could_cycle = val.is<sqf::runtime::t_array>();
+                m_value.push_back(std::move(val));
+                if (could_cycle && !recursion_test())
+                {
+                    m_value.pop_back();
+                    return false;
+                }
+                return true;
+            }
             sqf::runtime::value pop_back() { auto back = m_value.back(); m_value.pop_back(); return back; }
 
             void reverse() { std::reverse(m_value.begin(), m_value.end()); }

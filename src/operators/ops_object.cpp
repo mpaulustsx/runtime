@@ -232,12 +232,9 @@ namespace
     }
     value domove_object_array(runtime& runtime, value::cref left, value::cref right)
     {
-        auto obj = left.data<d_object>()->value();
-        if (obj->is_vehicle())
-        {
-            runtime.__logmsg(err::ExpectedUnit(runtime.context_active().current_frame().diag_info_from_position()));
-            return {};
-        }
+        // Real Arma's doMove works on units AND vehicles (AI-driven
+        // tanks/boats/planes are routinely ordered to move) - rejecting
+        // vehicles here was a deviation from that, not a real restriction.
         setpos_object_array(runtime, left, right);
         return {};
     }
@@ -250,11 +247,6 @@ namespace
             if (!arr->at(i).is<t_object>())
             {
                 runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), i, t_object(), arr->at(i).type()));
-                errflag = true;
-            }
-            else if (arr->at(i).data<d_object>()->value()->is_vehicle())
-            {
-                runtime.__logmsg(err::ExpectedUnit(runtime.context_active().current_frame().diag_info_from_position()));
                 errflag = true;
             }
         }

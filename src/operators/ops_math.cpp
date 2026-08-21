@@ -100,6 +100,31 @@ namespace
 	{
 		return (static_cast<float>(std::rand()) / RAND_MAX) * right.data<d_scalar, float>();
 	}
+	value random_array(runtime& runtime, value::cref right)
+	{
+		// Real Arma's array form: random [min, mid, max] - a triangular
+		// distribution peaking at mid, split 50/50 between the two sides.
+		// Was previously an unimplemented dummy stub (always nil); this
+		// call shape is common for "pick a value with some jitter around a
+		// midpoint" (e.g. this-many-seconds-from-now with variance).
+		auto arr = right.data<d_array>();
+		if (!arr->check_type(runtime, t_scalar(), 3))
+		{
+			return {};
+		}
+		auto min = arr->at(0).data<d_scalar, float>();
+		auto mid = arr->at(1).data<d_scalar, float>();
+		auto max = arr->at(2).data<d_scalar, float>();
+		auto roll = static_cast<float>(std::rand()) / RAND_MAX;
+		if (roll < 0.5f)
+		{
+			return mid - ((static_cast<float>(std::rand()) / RAND_MAX) * (mid - min));
+		}
+		else
+		{
+			return mid + ((static_cast<float>(std::rand()) / RAND_MAX) * (max - mid));
+		}
+	}
 	value min_scalar_scalar(runtime& runtime, value::cref left, value::cref right)
 	{
 		auto l = left.data<d_scalar, float>();
@@ -419,6 +444,20 @@ namespace
 		}
 		return value(arr);
 	}
+	value vectorfromto_array_array(runtime& runtime, value::cref left, value::cref right)
+	{
+		// Real Arma's vectorFromTo is the normalized direction from left to
+		// right - vectorNormalized (right vectorDiff left). Was previously
+		// an unimplemented dummy stub (always returned nil), breaking any
+		// caller (e.g. straight-line movement toward a destination) that
+		// used it for perfectly ordinary, non-degenerate positions.
+		auto diff = vectordiff_array_array(runtime, right, left);
+		if (diff.data() == nullptr)
+		{
+			return {};
+		}
+		return vectornormalized_array(runtime, diff);
+	}
 	value tofixed_scalar(runtime& runtime, value::cref right)
 	{
 		auto i = right.data<d_scalar, int>();
@@ -466,6 +505,7 @@ void sqf::operators::ops_math(sqf::runtime::runtime& runtime)
 	runtime.register_sqfop(unary("sqrt", t_scalar(), "Returns square root of x.", sqrt_scalar));
 	runtime.register_sqfop(unary("tan", t_scalar(), "Tangent of x, argument in Degrees.", tan_scalar));
 	runtime.register_sqfop(unary("random", t_scalar(), "Random real (floating point) value from 0 (inclusive) to x (not inclusive).", random_scalar));
+	runtime.register_sqfop(unary("random", t_array(), "Random real value from a [min, mid, max] triangular distribution peaking at mid.", random_array));
 	runtime.register_sqfop(unary("-", t_scalar(), "Zero minus a.", minus_scalar));
 	runtime.register_sqfop(unary("+", t_scalar(), "Returns a copy of a.", plus_scalar));
 	runtime.register_sqfop(unary("+", t_nan(), "Returns a copy of a.", plus_scalar));
@@ -498,6 +538,7 @@ void sqf::operators::ops_math(sqf::runtime::runtime& runtime)
 	runtime.register_sqfop(binary(4, "vectorDistance", t_array(), t_array(), "Distance between two 3D vectors.", vectordistance_array_array));
 	runtime.register_sqfop(binary(4, "vectorDistanceSqr", t_array(), t_array(), "Squared distance between two 3D vectors.", vectordistancesqr_array_array));
 	runtime.register_sqfop(binary(4, "vectorDotProduct", t_array(), t_array(), "Dot product of two 3D vectors.", vectordotproduct_array_array));
+	runtime.register_sqfop(binary(4, "vectorFromTo", t_array(), t_array(), "Normalized direction vector from one 3D position to another.", vectorfromto_array_array));
 	runtime.register_sqfop(unary("vectorMagnitude", t_array(), "Magnitude of a 3D vector.", vectormagnitude_array));
 	runtime.register_sqfop(unary("vectorMagnitudeSqr", t_array(), "Squared magnitude of a 3D vector.", vectormagnitudesqr_array));
 	runtime.register_sqfop(binary(4, "vectorMultiply", t_array(), t_scalar(), "Multiplies 3D vector by a t_scalar().", vectormultiply_array_scalar));

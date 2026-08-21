@@ -18,6 +18,7 @@
 
 #include "object.h"
 #include "d_object.h"
+#include "d_location.h"
 #include "group.h"
 #include <cmath>
 #include "d_group.h"
@@ -26,6 +27,7 @@
 
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
 
 
 namespace err = logmessage::runtime;
@@ -1611,6 +1613,375 @@ namespace
         auto pos = obj->value()->position();
         return inarea_check(runtime, pos.x, pos.y, right);
     }
+
+    // = = = = = = = = Third batch, graduated from ops_dummy_*.cpp = = = = = = = =
+    // Same minimal-but-real bar as the earlier graduated batches above: no
+    // rendering, no physics, no real AI/network - just state a script can
+    // set and read back faithfully.
+
+    value getdir_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        return obj->value()->direction();
+    }
+
+    // Bearing (in degrees, 0-360, clockwise from north) from `from` to
+    // `to` - the semantics of the binary `_from getDir _to` form.
+    float bearing_between(::sqf::runtime::vec3 from, ::sqf::runtime::vec3 to)
+    {
+        float dx = to.x - from.x;
+        float dy = to.y - from.y;
+        float deg = std::atan2(dx, dy) * (180.0f / 3.14159265358979323846f);
+        if (deg < 0.0f) { deg += 360.0f; }
+        return deg;
+    }
+    value getdir_object_object(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto l = left.data<d_object>();
+        auto r = right.data<d_object>();
+        if (l->is_null() || r->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        return bearing_between(l->value()->position(), r->value()->position());
+    }
+    value getdir_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto l = left.data<d_object>();
+        if (l->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        ::sqf::runtime::vec3 to = *right.data<d_array>();
+        return bearing_between(l->value()->position(), to);
+    }
+    value getdir_array_object(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto r = right.data<d_object>();
+        if (r->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        ::sqf::runtime::vec3 from = *left.data<d_array>();
+        return bearing_between(from, r->value()->position());
+    }
+    value getdir_array_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        ::sqf::runtime::vec3 from = *left.data<d_array>();
+        ::sqf::runtime::vec3 to = *right.data<d_array>();
+        return bearing_between(from, to);
+    }
+
+    value attachto_object_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto child = left.data<d_object>();
+        if (child->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto args = right.data<d_array>();
+        if (args->empty() || !args->at(0).is<t_object>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 0, t_object(), args->empty() ? t_nothing() : args->at(0).type()));
+            return {};
+        }
+        auto parent = args->at(0).data<d_object>();
+        if (parent->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        // Offset is optional in real Arma (defaults to [0,0,0]).
+        ::sqf::runtime::vec3 offset{ 0, 0, 0 };
+        if (args->size() > 1 && args->at(1).is<t_array>())
+        {
+            offset = *args->at(1).data<d_array>();
+        }
+        child->value()->attach_to(std::make_shared<d_object>(parent->value()), offset);
+        return {};
+    }
+    value attachedto_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            return value(std::make_shared<d_object>());
+        }
+        auto parent = obj->value()->attached_to();
+        if (!parent || parent->is_null())
+        {
+            return value(std::make_shared<d_object>());
+        }
+        return value(parent);
+    }
+
+    // boundingBoxReal/boundingCenter: no real 3D models are loaded in this
+    // headless engine, so exact per-class geometry can't be derived. This
+    // returns a fixed, reasonable approximation (a small human-sized box
+    // for non-vehicles, a generic vehicle-sized box otherwise) instead of
+    // nil - the same "hardcode a plausible constant" approach worldSize
+    // above takes. Good enough for cargo-fit math that just needs *a*
+    // sensible box, not the real one.
+    value boundingboxreal_of(std::shared_ptr<d_object> obj)
+    {
+        bool is_vehicle = obj->value()->is_vehicle();
+        ::sqf::runtime::vec3 min = is_vehicle ? ::sqf::runtime::vec3{ -2.5f, -4.0f, 0.0f } : ::sqf::runtime::vec3{ -0.3f, -0.3f, 0.0f };
+        ::sqf::runtime::vec3 max = is_vehicle ? ::sqf::runtime::vec3{ 2.5f, 4.0f, 2.0f } : ::sqf::runtime::vec3{ 0.3f, 0.3f, 1.8f };
+        auto minarr = std::make_shared<d_array>();
+        minarr->push_back(min.x); minarr->push_back(min.y); minarr->push_back(min.z);
+        auto maxarr = std::make_shared<d_array>();
+        maxarr->push_back(max.x); maxarr->push_back(max.y); maxarr->push_back(max.z);
+        auto outer = std::make_shared<d_array>();
+        outer->push_back(value(minarr));
+        outer->push_back(value(maxarr));
+        return value(outer);
+    }
+    value boundingboxreal_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        return boundingboxreal_of(obj);
+    }
+    // Binary form's real-Arma semantics could not be confirmed (it does
+    // not appear to be documented, and Vindicta itself never calls it) -
+    // treated as an alias for the unary form, ignoring the right operand,
+    // rather than inventing distinct math that might be wrong.
+    value boundingboxreal_object_any(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto obj = left.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        return boundingboxreal_of(obj);
+    }
+    value boundingcenter_object(runtime& runtime, value::cref right)
+    {
+        auto obj = right.data<d_object>();
+        if (obj->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        bool is_vehicle = obj->value()->is_vehicle();
+        auto arr = std::make_shared<d_array>();
+        arr->push_back(0.0f);
+        arr->push_back(0.0f);
+        arr->push_back(is_vehicle ? 1.0f : 0.9f);
+        return value(arr);
+    }
+
+    // nearestObject singular forms, implemented in terms of the existing
+    // nearestObjects (plural) above: build the [pos_or_obj, filter, radius]
+    // triple it expects and take the closest (first) match.
+    value nearestobject_query(runtime& runtime, value::cref pos_or_obj, const std::string& filtertype)
+    {
+        auto filterarr = std::make_shared<d_array>();
+        std::string lower = filtertype;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](char c) { return (char)std::tolower((unsigned char)c); });
+        if (!lower.empty() && lower != "all")
+        {
+            filterarr->push_back(value(filtertype));
+        }
+        auto queryarr = std::make_shared<d_array>();
+        queryarr->push_back(pos_or_obj);
+        queryarr->push_back(value(filterarr));
+        // No radius limit is documented for nearestObject - search the
+        // whole (headless, terrain-less) world.
+        queryarr->push_back(1000000.0f);
+        auto res = nearestobjects_array(runtime, value(queryarr));
+        auto resarr = res.data_try<d_array>();
+        if (!resarr || resarr->empty())
+        {
+            return value(std::make_shared<d_object>());
+        }
+        return resarr->at(0);
+    }
+    value nearestobject_array(runtime& runtime, value::cref right)
+    {
+        auto arr = right.data<d_array>();
+        if (arr->size() < 2 || !arr->at(1).is<t_string>())
+        {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, arr->size()));
+            return {};
+        }
+        return nearestobject_query(runtime, arr->at(0), arr->at(1).data<d_string, std::string>());
+    }
+    value nearestobject_array_string(runtime& runtime, value::cref left, value::cref right)
+    {
+        return nearestobject_query(runtime, left, right.data<d_string, std::string>());
+    }
+    value nearestobject_object_string(runtime& runtime, value::cref left, value::cref right)
+    {
+        return nearestobject_query(runtime, left, right.data<d_string, std::string>());
+    }
+
+    // createLocation and the handful of accessors Vindicta actually calls
+    // on the result (position, variable space). See d_location.h for what
+    // "minimal" means here.
+    value createlocation_array(runtime& runtime, value::cref right)
+    {
+        auto arr = right.data<d_array>();
+        if (arr->size() != 4)
+        {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 4, arr->size()));
+            return {};
+        }
+        if (!arr->at(0).is<t_string>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 0, t_string(), arr->at(0).type()));
+            return {};
+        }
+        if (!arr->at(1).is<t_array>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 1, t_array(), arr->at(1).type()));
+            return {};
+        }
+        auto type = arr->at(0).data<d_string, std::string>();
+        ::sqf::runtime::vec3 pos = *arr->at(1).data<d_array>();
+        auto a = arr->at(2).data_try<d_scalar, float>(0.0f);
+        auto b = arr->at(3).data_try<d_scalar, float>(0.0f);
+        auto loc = location::create(runtime, std::move(type), pos, a, b);
+        return value(std::make_shared<d_location>(loc));
+    }
+    value locationnull_(runtime& runtime)
+    {
+        return value(std::make_shared<d_location>());
+    }
+    value isnull_location(runtime& runtime, value::cref right)
+    {
+        return right.data<d_location>()->is_null();
+    }
+    value deletelocation_location(runtime& runtime, value::cref right)
+    {
+        auto loc = right.data<d_location>();
+        if (!loc->is_null())
+        {
+            loc->value()->destroy(runtime);
+        }
+        return {};
+    }
+    value position_location(runtime& runtime, value::cref right)
+    {
+        auto loc = right.data<d_location>();
+        if (loc->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto pos = loc->value()->position();
+        auto arr = std::make_shared<d_array>();
+        arr->push_back(pos.x);
+        arr->push_back(pos.y);
+        arr->push_back(pos.z);
+        return value(arr);
+    }
+    value setpos_location_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto loc = left.data<d_location>();
+        if (loc->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        ::sqf::runtime::vec3 pos = *right.data<d_array>();
+        loc->value()->position(pos);
+        return {};
+    }
+    value type_location(runtime& runtime, value::cref right)
+    {
+        auto loc = right.data<d_location>();
+        if (loc->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValue(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        return value(std::string(loc->value()->type()));
+    }
+    value getVariable_location_string(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto loc = left.data<d_location>();
+        if (loc->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            runtime.__logmsg(err::ReturningNil(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto scope = std::static_pointer_cast<value_scope>(loc->value());
+        auto res = scope->try_get(right.data<d_string, std::string>());
+        if (res.has_value())
+        {
+            return *res;
+        }
+        return {};
+    }
+    value getVariable_location_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto loc = left.data<d_location>();
+        if (loc->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            runtime.__logmsg(err::ReturningNil(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto scope = std::static_pointer_cast<value_scope>(loc->value());
+        auto r = right.data<d_array>();
+        if (r->size() != 2)
+        {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, r->size()));
+            runtime.__logmsg(err::ReturningNil(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        if (!r->at(0).is<t_string>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, t_string(), r->at(0).type()));
+            runtime.__logmsg(err::ReturningNil(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto res = scope->try_get(r->at(0).data<d_string, std::string>());
+        if (res.has_value())
+        {
+            return *res;
+        }
+        return r->at(1);
+    }
+    value setVariable_location_array(runtime& runtime, value::cref left, value::cref right)
+    {
+        auto loc = left.data<d_location>();
+        if (loc->is_null())
+        {
+            runtime.__logmsg(err::ExpectedNonNullValueWeak(runtime.context_active().current_frame().diag_info_from_position()));
+            return {};
+        }
+        auto scope = std::static_pointer_cast<value_scope>(loc->value());
+        auto r = right.data<d_array>();
+        if (r->size() != 2 && r->size() != 3)
+        {
+            runtime.__logmsg(err::ExpectedArraySizeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, r->size()));
+            return {};
+        }
+        if (!r->at(0).is<t_string>())
+        {
+            runtime.__logmsg(err::ExpectedArrayTypeMissmatch(runtime.context_active().current_frame().diag_info_from_position(), 2, t_string(), r->at(0).type()));
+            return {};
+        }
+        scope->at(r->at(0).data<d_string, std::string>()) = r->at(1);
+        return {};
+    }
 }
 void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
 {
@@ -1710,4 +2081,33 @@ void sqf::operators::ops_object(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(unary("publicVariable", t_string(), "Broadcasts a variable to all machines. No network exists in this single-process VM, so this is a no-op.", publicvariable_string));
     runtime.register_sqfop(binary(4, "inArea", t_array(), t_array(), "Checks whether a position is inside the given area (array-shape form: [center, a, b, angle, isRectangle]).", inarea_array_array));
     runtime.register_sqfop(binary(4, "inArea", t_object(), t_array(), "Checks whether an object's position is inside the given area (array-shape form: [center, a, b, angle, isRectangle]).", inarea_object_array));
+
+    // Third batch, graduated from ops_dummy_*.cpp - see the function definitions above.
+    runtime.register_sqfop(unary("getDir", t_object(), "Returns direction (facing) of the object in degrees (0-360, clockwise from north).", getdir_object));
+    runtime.register_sqfop(unary("direction", t_object(), "Returns direction (facing) of the object in degrees (0-360, clockwise from north).", getdir_object));
+    runtime.register_sqfop(binary(4, "getDir", t_object(), t_object(), "Returns the bearing (in degrees, 0-360) from the first object's position to the second's.", getdir_object_object));
+    runtime.register_sqfop(binary(4, "getDir", t_object(), t_array(), "Returns the bearing (in degrees, 0-360) from the object's position to the given position.", getdir_object_array));
+    runtime.register_sqfop(binary(4, "getDir", t_array(), t_object(), "Returns the bearing (in degrees, 0-360) from the given position to the object's position.", getdir_array_object));
+    runtime.register_sqfop(binary(4, "getDir", t_array(), t_array(), "Returns the bearing (in degrees, 0-360) from the first position to the second.", getdir_array_array));
+    runtime.register_sqfop(binary(4, "attachTo", t_object(), t_array(), "Attaches the object to another object, [parent, offset]. No physics simulates the attachment actually following its parent in this headless engine - this just records the relationship.", attachto_object_array));
+    runtime.register_sqfop(unary("attachedTo", t_object(), "Returns the object this object is attached to via attachTo, or objNull if not attached.", attachedto_object));
+    runtime.register_sqfop(unary("boundingBoxReal", t_object(), "Returns the bounding box of the object in model space, [[minX,minY,minZ],[maxX,maxY,maxZ]]. No 3D models are loaded in this headless engine, so this is a fixed approximation (see the function definition above).", boundingboxreal_object));
+    runtime.register_sqfop(binary(4, "boundingBoxReal", t_object(), t_any(), "Same as the unary form above - see its comment for why the (undocumented) second argument is ignored.", boundingboxreal_object_any));
+    runtime.register_sqfop(unary("boundingCenter", t_object(), "Returns the geometric center of the object's bounding box, relative to the object. No 3D models are loaded in this headless engine, so this is a fixed approximation matching boundingBoxReal.", boundingcenter_object));
+    runtime.register_sqfop(unary("nearestObject", t_array(), "Returns the object nearest to the given position or object of the given type, [posOrObject, type]. objNull if none found.", nearestobject_array));
+    runtime.register_sqfop(binary(4, "nearestObject", t_array(), t_string(), "Returns the object nearest to the given position of the given type. objNull if none found.", nearestobject_array_string));
+    runtime.register_sqfop(binary(4, "nearestObject", t_object(), t_string(), "Returns the object nearest to the given object of the given type. objNull if none found.", nearestobject_object_string));
+    runtime.register_sqfop(unary("createLocation", t_array(), "Creates a location, [type, position, a, b]. No real terrain/location database is loaded in this headless engine - see d_location.h for the minimal state this tracks.", createlocation_array));
+    runtime.register_sqfop(nular("locationNull", "A non-existent Location. To compare non-existent locations use isNull or isEqualTo.", locationnull_));
+    runtime.register_sqfop(unary("isNull", t_location(), "Checks whether the tested item is Null.", isnull_location));
+    runtime.register_sqfop(unary("deleteLocation", t_location(), "Deletes a location.", deletelocation_location));
+    runtime.register_sqfop(unary("position", t_location(), "Returns the location's position.", position_location));
+    runtime.register_sqfop(unary("getPos", t_location(), "Returns the location's position.", position_location));
+    runtime.register_sqfop(unary("getPosATL", t_location(), "Returns the location's position. No terrain is loaded in this headless engine, so ATL/AGL/ASL all mean the same thing position already returns.", position_location));
+    runtime.register_sqfop(binary(4, "setPos", t_location(), t_array(), "Sets the location's position.", setpos_location_array));
+    runtime.register_sqfop(binary(4, "setPosATL", t_location(), t_array(), "Sets the location's position. No terrain is loaded in this headless engine, so ATL/AGL/ASL all mean the same thing setPos already does.", setpos_location_array));
+    runtime.register_sqfop(unary("type", t_location(), "Returns the location's type, as given to createLocation.", type_location));
+    runtime.register_sqfop(binary(4, "getVariable", t_location(), t_string(), "Return the value of variable in the variable space assigned to various data types. Returns nil if variable is undefined.", getVariable_location_string));
+    runtime.register_sqfop(binary(4, "getVariable", t_location(), t_array(), "Return the value of variable in the provided variable space. First element is expected to be the variable name as string. Returns second array item if variable is undefined.", getVariable_location_array));
+    runtime.register_sqfop(binary(4, "setVariable", t_location(), t_array(), "Sets a variable to given value in the provided variable space. First element is expected to be the variable name as string. Second element is expected to be anything.", setVariable_location_array));
 }

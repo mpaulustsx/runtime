@@ -123,6 +123,16 @@ namespace sqf
             std::vector<std::pair<size_t, ::sqf::runtime::value>> m_event_handlers;
             size_t m_next_eh_id = 0;
 
+            // attachTo/attachedTo state - a distinct relationship from
+            // m_parent_object above (which models vehicle crew, ie.
+            // moveInDriver/vehicle), tracking a plain object-to-object
+            // attachment plus its relative offset. No physics simulates the
+            // attached object following its parent around - this is just
+            // state tracking so isNull (attachedTo x) and similar checks
+            // work correctly.
+            std::shared_ptr<d_object> m_attached_to;
+            ::sqf::runtime::vec3 m_attach_offset;
+
             object(sqf::runtime::config config, bool is_vehicle);
             object(const object& obj) = delete;
         public:
@@ -167,6 +177,11 @@ namespace sqf
 
             float direction() const { return m_direction; }
             void direction(float val) { m_direction = val; }
+
+            std::shared_ptr<d_object> attached_to() const { return m_attached_to; }
+            ::sqf::runtime::vec3 attach_offset() const { return m_attach_offset; }
+            void attach_to(std::shared_ptr<d_object> parent, ::sqf::runtime::vec3 offset) { m_attached_to = std::move(parent); m_attach_offset = offset; }
+            void detach() { m_attached_to = {}; }
 
             bool captive() const { return m_captive; }
             void captive(bool val) { m_captive = val; }

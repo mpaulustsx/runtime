@@ -2202,6 +2202,10 @@ void sqf::operators::ops_generic(sqf::runtime::runtime& runtime)
 
     runtime.register_sqfop(binary(4, "select", t_array(), t_scalar(), "Selects the element at provided index from array. If the index provided equals the array length, nil will be returned.", select_array_scalar));
     runtime.register_sqfop(binary(9, "#", t_array(), t_scalar(), "Selects the element at provided index from array. If the index provided equals the array length, nil will be returned.", select_array_scalar));
+    // Real Arma's # is a full alias of select, including the boolean-index
+    // overload - without this, ARRAY # BOOL (a legal, common idiom) throws
+    // "Unknown input combination" instead of matching `select`'s behavior.
+    runtime.register_sqfop(binary(9, "#", t_array(), t_boolean(), "Selects the first element if provided boolean is false, second element if it is true.", select_array_bool));
     runtime.register_sqfop(unary("selectRandom", t_array(), "Returns a random element from the given array.", selectrandom_array));
 
     runtime.register_sqfop(binary(4, "select", t_array(), t_boolean(), "Selects the first element if provided boolean is false, second element if it is true.", select_array_bool));

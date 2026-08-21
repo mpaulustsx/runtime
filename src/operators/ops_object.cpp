@@ -56,7 +56,12 @@ namespace
     value createvehicle_array(runtime& runtime, value::cref right)
     {
         auto arr = right.data<d_array>();
-        if (!arr->check_type(runtime, std::array<sqf::runtime::type, 5>{ t_string(), t_array(), t_array(), t_string(), }))
+        // Real Arma's array form is [type, position, markers, placement, special] -
+        // placement is the numeric radius read via at(3) below as a scalar, not the
+        // string this check was asking for; special (the real string slot, index 4)
+        // is accepted but never read - this constructor doesn't use it. optionalstart=4
+        // accepts the 4-argument call (no special) as well as the full 5-argument one.
+        if (!arr->check_type(runtime, std::array<sqf::runtime::type, 5>{ t_string(), t_array(), t_array(), t_scalar(), t_string() }, 4))
         {
             return {};
         }
@@ -91,9 +96,15 @@ namespace
             }
         }
         auto veh = object::create(runtime, conf, true);
+        // radius==0 (a valid, common call meaning "spawn exactly here, no
+        // scatter") makes the modulus below zero, which is UB / SIGFPEs on
+        // this platform - matches the radius>0 guard used elsewhere in this
+        // file (see the createUnit array-form scatter below).
+        float scatterX = radius > 0 ? static_cast<float>((std::rand() % static_cast<int>(radius * 2)) - radius) : 0.0f;
+        float scatterY = radius > 0 ? static_cast<float>((std::rand() % static_cast<int>(radius * 2)) - radius) : 0.0f;
         veh->position({
-            position->at(0).data<d_scalar, float>() + ((std::rand() % static_cast<int>(radius * 2)) - radius),
-            position->at(1).data<d_scalar, float>() + ((std::rand() % static_cast<int>(radius * 2)) - radius),
+            position->at(0).data<d_scalar, float>() + scatterX,
+            position->at(1).data<d_scalar, float>() + scatterY,
             position->at(2).data<d_scalar, float>()
             });
         return std::make_shared<d_object>(veh);
@@ -298,9 +309,15 @@ namespace
             }
         }
         auto veh = object::create(runtime, conf, false);
+        // radius==0 (a valid, common call meaning "spawn exactly here, no
+        // scatter") makes the modulus below zero, which is UB / SIGFPEs on
+        // this platform - matches the radius>0 guard used elsewhere in this
+        // file (see the createUnit array-form scatter below).
+        float scatterX = radius > 0 ? static_cast<float>((std::rand() % static_cast<int>(radius * 2)) - radius) : 0.0f;
+        float scatterY = radius > 0 ? static_cast<float>((std::rand() % static_cast<int>(radius * 2)) - radius) : 0.0f;
         veh->position({
-            position->at(0).data<d_scalar, float>() + ((std::rand() % static_cast<int>(radius * 2)) - radius),
-            position->at(1).data<d_scalar, float>() + ((std::rand() % static_cast<int>(radius * 2)) - radius),
+            position->at(0).data<d_scalar, float>() + scatterX,
+            position->at(1).data<d_scalar, float>() + scatterY,
             position->at(2).data<d_scalar, float>()
             });
         return std::make_shared<d_object>(veh);

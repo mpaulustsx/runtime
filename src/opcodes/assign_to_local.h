@@ -22,7 +22,11 @@ namespace sqf::opcodes
             auto& context = vm.context_active();
 
             auto value = vm.context_active().pop_value();
-            if (m_variable_name.empty()) { return; }
+            // See the matching comment in assign_to::execute() - a private
+            // declaration/assignment must also evaluate to nil, or a code
+            // block ending in one leaves nothing for its caller to consume.
+            sqf::runtime::value nilResult;
+            if (m_variable_name.empty()) { vm.context_active().push_value(nilResult); return; }
             if (!value.has_value())
             {
                 if (context.weak_error_handling())
@@ -33,6 +37,7 @@ namespace sqf::opcodes
                 {
                     vm.__logmsg(logmessage::runtime::FoundNoValue(diag_info()));
                 }
+                vm.context_active().push_value(nilResult);
                 return;
             }
             else if (value->is<sqf::types::t_nothing>())
@@ -41,6 +46,7 @@ namespace sqf::opcodes
             }
 
             context.current_frame()[m_variable_name] = *value;
+            vm.context_active().push_value(nilResult);
         }
         virtual std::string to_string() const override { return std::string("ASSIGNTOLOCAL ") + m_variable_name; }
         std::string_view variable_name() const { return m_variable_name; }

@@ -433,6 +433,14 @@ namespace
                             auto max = runtime.configuration().max_loop_iterations_in_unscheduled;
                             if (max > 0 && m_loop_count >= max)
                             {
+                                // Real Arma's while do always evaluates to nil,
+                                // whether the loop ran to completion or was cut
+                                // short here - without pushing one, a while loop
+                                // used as a code block's last statement leaves
+                                // nothing for the caller to consume (e.g. isNil
+                                // {...; while {...} do {...};} throws "no value
+                                // found on value stack" instead of seeing nil).
+                                runtime.context_active().push_value({});
                                 return result::ok;
                             }
                         }
@@ -440,6 +448,11 @@ namespace
                         frame.clear_value_scope();
                         return result::exchange;
                 }
+                // Falls through here once the condition evaluates false (the
+                // normal, successful end of the loop) or on a malformed
+                // condition (already logged above) - either way while do must
+                // still evaluate to something. See the comment above for why.
+                runtime.context_active().push_value({});
                 return result::ok;
             };
         };
@@ -509,6 +522,10 @@ namespace
                         updated > m_for.to() :
                         updated < m_for.to())
                     {
+                        // for do always evaluates to nil - see the matching
+                        // comment on behavior_while_exit::enact for why this
+                        // push is needed.
+                        runtime.context_active().push_value({});
                         return result::ok;
                     }
                     res = updated;
@@ -520,6 +537,7 @@ namespace
                 else
                 {
                     runtime.__logmsg(logmessage::runtime::ForStepVariableTypeMissmatch(frame.diag_info_from_position(), m_for.variable(), t_scalar(), res.type()));
+                    runtime.context_active().push_value({});
                     return result::ok;
                 }
             };
@@ -565,8 +583,20 @@ namespace
                     runtime.__logmsg(logmessage::runtime::ArraySizeChanged(frame.diag_info_from_position(), m_size, m_array->size()));
                     m_size = m_array->size();
                 }
-                if (++m_index == m_size)
+                ++m_index;
+                // >= rather than == : if the array shrank enough this
+                // iteration that the corrected m_size is now smaller than
+                // the incremented m_index (e.g. the array became empty
+                // while m_index was about to become 1), == would never
+                // trigger and the code below would call at(m_index) out of
+                // bounds - an uncaught std::out_of_range that kills the
+                // whole process rather than ending the loop gracefully.
+                if (m_index >= m_size)
                 {
+                    // forEach always evaluates to nil - see the matching
+                    // comment on behavior_while_exit::enact for why this
+                    // push is needed.
+                    runtime.context_active().push_value({});
                     return result::ok;
                 }
                 else

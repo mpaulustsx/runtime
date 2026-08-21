@@ -1,6 +1,9 @@
 #pragma once
 #include <string>
 #include <memory>
+#include <utility>
+#include <vector>
+#include <algorithm>
 
 #include "type.h"
 
@@ -73,7 +76,26 @@ namespace sqf::runtime
         {
             if (other->type() != type()) { return false; }
             if (other.get() == this) { return true; }
-            return do_equals(other, invariant);
+            // Containers (ARRAY, HASHMAP) recurse into their elements'
+            // equals() here. Two distinct but structurally circular graphs
+            // (e.g. two different objects that both hold self/cross
+            // references back into themselves) can keep re-entering the
+            // comparison of this exact (this, other) pair forever, since
+            // neither side is ever pointer-identical to trip the check
+            // above - that recurses until the stack overflows. Track pairs
+            // currently being compared on this thread's call stack; seeing
+            // the same pair again means we're in a cycle, so stop and
+            // report unequal instead of recursing further.
+            thread_local std::vector<std::pair<const data*, const data*>> s_equals_in_progress;
+            std::pair<const data*, const data*> key(this, other.get());
+            if (std::find(s_equals_in_progress.begin(), s_equals_in_progress.end(), key) != s_equals_in_progress.end())
+            {
+                return false;
+            }
+            s_equals_in_progress.push_back(key);
+            bool result = do_equals(other, invariant);
+            s_equals_in_progress.pop_back();
+            return result;
         }
 
         /// <summary>

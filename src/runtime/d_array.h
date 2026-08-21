@@ -109,8 +109,18 @@ namespace sqf
                 return std::make_shared<d_array>(copy);
             }
 
+            // Guards against self- or cross-referential array/hashmap graphs
+            // recursing without bound - same rationale as data::equals()'s
+            // pair guard (see its comment), but unary since to_string only
+            // depends on `this`.
             std::string to_string_sqf() const override
             {
+                thread_local std::vector<const d_array*> s_tostring_sqf_in_progress;
+                if (std::find(s_tostring_sqf_in_progress.begin(), s_tostring_sqf_in_progress.end(), this) != s_tostring_sqf_in_progress.end())
+                {
+                    return "[]";
+                }
+                s_tostring_sqf_in_progress.push_back(this);
                 std::stringstream sstream;
                 sstream << "[";
                 if (m_value.size() > 0)
@@ -122,10 +132,17 @@ namespace sqf
                     sstream.seekp(-1, std::ios_base::end);
                 }
                 sstream << "]";
+                s_tostring_sqf_in_progress.pop_back();
                 return sstream.str();
             }
             std::string to_string() const override
             {
+                thread_local std::vector<const d_array*> s_tostring_in_progress;
+                if (std::find(s_tostring_in_progress.begin(), s_tostring_in_progress.end(), this) != s_tostring_in_progress.end())
+                {
+                    return "[...]";
+                }
+                s_tostring_in_progress.push_back(this);
                 std::stringstream sstream;
                 sstream << "[";
                 if (m_value.size() > 0)
@@ -137,6 +154,7 @@ namespace sqf
                     sstream.seekp(-1, std::ios_base::end);
                 }
                 sstream << "]";
+                s_tostring_in_progress.pop_back();
                 return sstream.str();
             }
 

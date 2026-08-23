@@ -91,6 +91,26 @@ namespace
     {
         return !left.data()->equals(right.data(), true);
     }
+    // HashMap's own do_equals() (ops_hashmap.h) does structural comparison
+    // of its stored key/value pairs - correct for "do these two containers
+    // hold the same data", which is what isEqualTo/isNotEqualTo (routed
+    // through equals_any_any below) still give you. But Vindicta's
+    // OOP_Light uses a HashMap itself as an object's identity
+    // (STORAGE_HASHMAP; see OOP_Light.h's "OBJECT STORAGE" section), and
+    // that project's code compares object identities with == (e.g.
+    // Garrison.sqf's "if (_thisObject == _garrison)"), expecting "is this
+    // literally the same object" - not "do the two objects currently hold
+    // equal member values", which two distinct objects can do by
+    // coincidence at any moment. Compare the underlying data pointer
+    // directly instead of falling into do_equals().
+    value equals_hashmap_hashmap(runtime& runtime, value::cref left, value::cref right)
+    {
+        return left.data().get() == right.data().get();
+    }
+    value notequals_hashmap_hashmap(runtime& runtime, value::cref left, value::cref right)
+    {
+        return left.data().get() != right.data().get();
+    }
     value isequalto_any_any(runtime& runtime, value::cref left, value::cref right)
     {
         if (left.empty() && right.empty())
@@ -233,7 +253,7 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "==", t_control(), t_control(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(3, "==", t_location(), t_location(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(3, "==", t_boolean(), t_boolean(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
-    runtime.register_sqfop(binary(3, "==", t_hashmap(), t_hashmap(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
+    runtime.register_sqfop(binary(3, "==", t_hashmap(), t_hashmap(), "Check if one value is equal to another. For HashMap this compares object identity (same underlying container), not stored content - use isEqualTo to compare what two HashMaps currently hold.", equals_hashmap_hashmap));
 
     runtime.register_sqfop(binary(3, "!=", t_scalar(), t_scalar(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_side(), t_side(), "Returns whether one value is not equal to another.", notequals_any_any));
@@ -245,7 +265,7 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "!=", t_display(), t_display(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_control(), t_control(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_location(), t_location(), "Returns whether one value is not equal to another.", notequals_any_any));
-    runtime.register_sqfop(binary(3, "!=", t_hashmap(), t_hashmap(), "Returns whether one value is not equal to another.", notequals_any_any));
+    runtime.register_sqfop(binary(3, "!=", t_hashmap(), t_hashmap(), "Returns whether one value is not equal to another. For HashMap this compares object identity (same underlying container), not stored content.", notequals_hashmap_hashmap));
     runtime.register_sqfop(binary(4, "isEqualTo", t_any(), t_any(), "Check if one value is equal to another. Both values need to be of the same type.", isequalto_any_any));
     runtime.register_sqfop(binary(4, "isNotEqualTo", t_any(), t_any(), "Check if one value is not equal to another. Both values need to be of the same type.", isnotequalto_any_any));
     runtime.register_sqfop(binary(4, "isEqualType", t_any(), t_any(), "Compares 2 values by their type. A much faster alternative to typeName a == typeName b.", isequaltype_any_any));

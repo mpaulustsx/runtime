@@ -927,47 +927,11 @@ namespace
         }
         return newindex;
     }
-    // Array membership - find/in/pushBackUnique - asks "is this element the
-    // same value as the one I have", and for a HashMap that can only mean the
-    // same object, never one that merely holds equal data at this instant.
-    // Same reasoning that gave HashMap its own ==/!= in ops_logic.cpp.
-    //
-    // std::find's default uses value::operator==, which routes through
-    // do_equals(), and d_hashmap's do_equals() compares its stored key/value
-    // pairs structurally. Two distinct objects holding equal members - which
-    // any two freshly constructed objects of the same class do, before their
-    // distinguishing fields are set - then compare equal, so `find` reports
-    // the wrong index, `in` reports a non-member as present, and
-    // pushBackUnique silently drops a distinct object instead of adding it.
-    // None of that errors; it just quietly does the wrong thing.
-    //
-    // isEqualTo deliberately keeps the structural comparison: asking whether
-    // two HashMaps currently hold the same data is still a separate, useful
-    // question, just not the one membership is asking.
-    //
-    // Only the element itself is compared by identity here. A HashMap nested
-    // inside an array element still falls to the structural path below, since
-    // fixing that means changing do_equals()' own recursion for every caller,
-    // which is a wider change than the one this bug calls for.
-    bool member_equals(sqf::runtime::value::cref a, sqf::runtime::value::cref b)
-    {
-        if (a.is<t_hashmap>() || b.is<t_hashmap>())
-        {
-            return a.is<t_hashmap>() && b.is<t_hashmap>() && a.data().get() == b.data().get();
-        }
-        return a == b;
-    }
-    d_array::iterator find_member(std::shared_ptr<d_array> arr, sqf::runtime::value::cref needle)
-    {
-        return std::find_if(arr->begin(), arr->end(),
-            [&needle](sqf::runtime::value::cref element) { return member_equals(element, needle); });
-    }
-
     value pushbackunique_array_any(runtime& runtime, value::cref left, value::cref right)
     {
         auto arr = left.data<d_array>();
         int newindex = static_cast<int>(arr->size());
-        auto found = find_member(arr, right);
+        auto found = std::find(arr->begin(), arr->end(), right);
         if (found == arr->end())
         {
             if (!arr->push_back(value(right)))
@@ -1402,11 +1366,7 @@ namespace
 
         std::copy_if(l->begin(), l->end(), std::back_inserter(result), [&r](value::cref current) {
 
-            // By identity for a HashMap element - see member_equals above.
-            // "_units - [_unit]" has to drop that unit, not whichever one
-            // happens to hold equal data at the time.
-            auto found = std::find_if(r->begin(), r->end(),
-                [&current](value::cref element) { return member_equals(element, current); });
+            auto found = std::find(r->begin(), r->end(), current);
             // We only want element in output if it doesn't exist in right arg
             return found == r->end();
             });
@@ -1441,15 +1401,12 @@ namespace
 
         std::copy_if(l->begin(), l->end(), std::back_inserter(result), [&r, &result](value::cref current) {
 
-            // By identity for a HashMap element - see member_equals above.
-            auto found = std::find_if(result.begin(), result.end(),
-                [&current](value::cref element) { return member_equals(element, current); });
+            auto found = std::find(result.begin(), result.end(), current);
 
             // Result already contains the element. Don't add it (remove duplicates)
             if (found != result.end()) return false;
 
-            found = std::find_if(r->begin(), r->end(),
-                [&current](value::cref element) { return member_equals(element, current); });
+            found = std::find(r->begin(), r->end(), current);
 
             // Only add if right argument also contains the element
             return found != r->end();
@@ -1478,7 +1435,7 @@ namespace
     value find_array_any(runtime& runtime, value::cref left, value::cref right)
     {
         auto l = left.data<d_array>();
-        auto found = find_member(l, right);
+        auto found = std::find(l->begin(), l->end(), right);
 
         if (found != l->end())
             return static_cast<int>(std::distance(l->begin(), found));
@@ -2095,7 +2052,7 @@ namespace
     value in_any_array(runtime& runtime, value::cref left, value::cref right)
     {
         auto arr = right.data<d_array>();
-        auto res = find_member(arr, left);
+        auto res = std::find(arr->begin(), arr->end(), left);
         return res != arr->end();
     }
     value in_string_string(runtime& runtime, value::cref left, value::cref right)

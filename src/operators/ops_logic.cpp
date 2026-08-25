@@ -111,6 +111,32 @@ namespace
     {
         return left.data().get() != right.data().get();
     }
+    // isEqualRef / isNotEqualRef ask whether two values are the same
+    // underlying instance - a different question from isEqualTo's "do they
+    // hold equal content right now", which is why the reference documents
+    // the two side by side. The distinction only has teeth for the types
+    // that are references (Array, HashMap, Code, Object, Group): two
+    // separately built but structurally identical arrays are isEqualTo and
+    // are not isEqualRef.
+    //
+    // A value type has no instance to speak of, and comparing where the
+    // number happens to live would be meaningless, so those fall through to
+    // the content comparison and `1 isEqualRef 1` still answers true.
+    value isequalref_any_any(runtime& runtime, value::cref left, value::cref right)
+    {
+        if (left.empty() || right.empty()) { return left.empty() && right.empty(); }
+        if (left.type() != right.type()) { return false; }
+        if (left.data().get() == right.data().get()) { return true; }
+        // A reference type that got this far is a genuinely different
+        // instance, whatever it happens to contain. Everything else is a
+        // value, where content is the only meaningful answer.
+        if (left.is<t_array>() || left.is<t_hashmap>() || left.is<t_code>()) { return false; }
+        return left == right;
+    }
+    value isnotequalref_any_any(runtime& runtime, value::cref left, value::cref right)
+    {
+        return !(isequalref_any_any(runtime, left, right).data<d_boolean, bool>());
+    }
     value isequalto_any_any(runtime& runtime, value::cref left, value::cref right)
     {
         if (left.empty() && right.empty())
@@ -253,6 +279,8 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "==", t_control(), t_control(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(3, "==", t_location(), t_location(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(3, "==", t_boolean(), t_boolean(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
+    runtime.register_sqfop(binary(4, "isEqualRef", t_any(), t_any(), "Compares two values by reference: true only when both are the same instance. Unlike isEqualTo, two separately built but structurally identical arrays/hashmaps are not equal here.", isequalref_any_any));
+    runtime.register_sqfop(binary(4, "isNotEqualRef", t_any(), t_any(), "Compares two values by reference: true unless both are the same instance.", isnotequalref_any_any));
     runtime.register_sqfop(binary(3, "==", t_hashmap(), t_hashmap(), "Check if one value is equal to another. For HashMap this compares object identity (same underlying container), not stored content - use isEqualTo to compare what two HashMaps currently hold.", equals_hashmap_hashmap));
 
     runtime.register_sqfop(binary(3, "!=", t_scalar(), t_scalar(), "Returns whether one value is not equal to another.", notequals_any_any));

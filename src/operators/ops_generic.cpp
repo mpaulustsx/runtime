@@ -218,6 +218,12 @@ namespace
     value isdedicated_(runtime& runtime) { return false; }
     value ismultiplayer_(runtime& runtime) { return false; }
     value hasinterface_(runtime& runtime) { return false; }
+    // The reference documents 0 for clientOwner outside multiplayer (and on
+    // the server machine itself within it); isMultiplayer is always false
+    // here, so 0 is the one answer consistent with every other environment
+    // predicate above rather than a value implying a network identity that
+    // does not exist in this single-process VM.
+    value clientowner_(runtime& runtime) { return 0.0f; }
     value if_bool(runtime& runtime, value::cref right)
     {
         return std::make_shared<d_if>(right.data_try<d_boolean, bool>(false));
@@ -2332,6 +2338,7 @@ void sqf::operators::ops_generic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(nular("isDedicated", "Always false here: there is no separate dedicated-server machine.", isdedicated_));
     runtime.register_sqfop(nular("isMultiplayer", "Always false here: this is a single local session, not a networked one.", ismultiplayer_));
     runtime.register_sqfop(nular("hasInterface", "Always false here: nothing is rendering a player display.", hasinterface_));
+    runtime.register_sqfop(nular("clientOwner", "Always 0 here, matching the reference's own value outside multiplayer: there is no second machine for a network client ID to distinguish this one from.", clientowner_));
     runtime.register_sqfop(unary("loadFile", t_string(), "", loadfile_string));
     runtime.register_sqfop(unary("preprocessFileLineNumbers", t_string(), "Reads and processes the content of the specified file. Preprocessor is C-like, supports comments using // or /* and */ and PreProcessor Commands.", preprocessfile_string));
     runtime.register_sqfop(unary("preprocessFile", t_string(), "Reads and processes the content of the specified file. Preprocessor is C-like, supports comments using // or /* and */ and PreProcessor Commands.", preprocessfile_string));

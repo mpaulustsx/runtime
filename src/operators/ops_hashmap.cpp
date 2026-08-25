@@ -56,6 +56,25 @@ namespace
     bool is_sealed(std::unordered_map<sqf::runtime::value, sqf::runtime::value>& map) { return has_flag(map, "sealed"); }
     bool is_no_copy(std::unordered_map<sqf::runtime::value, sqf::runtime::value>& map) { return has_flag(map, "nocopy"); }
 
+    // The reference does not accept a HashMap as a HashMap key - it is a
+    // mutable reference type, not a hashable value, and the real engine
+    // throws on it rather than silently accepting it the way this VM's own
+    // std::unordered_map<value, value> otherwise would (d_hashmap::hash()
+    // happily hashes one, cycle guard and all). Left unchecked, code that
+    // keys a cache by a live hashmap-storage object passes every SQF-VM run
+    // and only surfaces as a live-server crash - exactly the gap that let
+    // SensorGarrisonTargets and IntelDatabase's own caches ship broken.
+    // Scoped to that one evidenced case, not every key restriction the
+    // reference might also impose - no evidence here for any of the others.
+    bool is_valid_hashmap_key(value::cref key) { return !key.is<t_hashmap>(); }
+
+    void log_invalid_hashmap_key(runtime& runtime, const std::string& source, value::cref key)
+    {
+        runtime.__logmsg(err::ErrorMessage(
+            runtime.context_active().current_frame().diag_info_from_position(),
+            source, "a hashmap cannot itself be used as a hashmap key: "s + key.to_string()));
+    }
+
     // A resolved "#create"/"#clone"/"#delete" chain is always stored as an
     // Array of Code, even when it holds just one entry - see the comment on
     // resolve_code_chain below for why. A hashmap assembled by hand rather
@@ -353,7 +372,7 @@ namespace
                 {
                     auto& key = subArr->at(0);
                     auto& value = subArr->at(1);
-                    // ToDo: Check key-type matches
+                    if (!is_valid_hashmap_key(key)) { log_invalid_hashmap_key(runtime, "createHashMapFromArray"s, key); continue; }
                     hashmap[key] = value;
                 }
                 else
@@ -391,7 +410,9 @@ namespace
         std::unordered_map<sqf::runtime::value, sqf::runtime::value> hashmap;
         for (size_t i = 0; i < keys->size(); i++)
         {
-            hashmap[keys->at(i)] = i < values->size() ? values->at(i) : sqf::runtime::value{};
+            auto& key = keys->at(i);
+            if (!is_valid_hashmap_key(key)) { log_invalid_hashmap_key(runtime, "createHashMapFromArray"s, key); continue; }
+            hashmap[key] = i < values->size() ? values->at(i) : sqf::runtime::value{};
         }
         return std::make_shared<d_hashmap>(hashmap);
     }
@@ -412,6 +433,8 @@ namespace
         auto& key = arr->at(0);
         auto& value = arr->at(1);
 
+        if (!is_valid_hashmap_key(key)) { log_invalid_hashmap_key(runtime, "set"s, key); return {}; }
+
         // "sealed" forbids adding a key, not editing one that is already
         // there - an existing key still goes through below. This is a
         // warning, not a fatal error: an error-level __logmsg halts the
@@ -424,12 +447,13 @@ namespace
             return {};
         }
 
-        // ToDo: Check key-type matches
         data->map()[key] = value;
         return {};
     }
     value get_hashmap_any(runtime& runtime, value::cref left, value::cref right)
     {
+        if (!is_valid_hashmap_key(right)) { log_invalid_hashmap_key(runtime, "get"s, right); return {}; }
+
         auto data = left.data<d_hashmap>();
         auto res = data->map().find(right);
         if (res != data->map().end())
@@ -444,6 +468,8 @@ namespace
     }
     value deleteat_hashmap_any(runtime& runtime, value::cref left, value::cref right)
     {
+        if (!is_valid_hashmap_key(right)) { log_invalid_hashmap_key(runtime, "deleteAt"s, right); return {}; }
+
         auto data = left.data<d_hashmap>();
 
         if (is_sealed(data->map()))
@@ -469,6 +495,8 @@ namespace
     }
     value in_any_hashmap(runtime& runtime, value::cref left, value::cref right)
     {
+        if (!is_valid_hashmap_key(left)) { log_invalid_hashmap_key(runtime, "in"s, left); return false; }
+
         auto data = right.data<d_hashmap>();
         return data->map().find(left) != data->map().end();
     }
@@ -589,6 +617,7 @@ namespace
         sqf::runtime::value key, fallback;
         bool store;
         read_default_args(right, key, fallback, store);
+        if (!is_valid_hashmap_key(key)) { log_invalid_hashmap_key(runtime, "getOrDefault"s, key); return {}; }
 
         auto data = left.data<d_hashmap>();
         auto found = data->map().find(key);
@@ -632,6 +661,7 @@ namespace
         sqf::runtime::value key, fallback;
         bool store;
         read_default_args(right, key, fallback, store);
+        if (!is_valid_hashmap_key(key)) { log_invalid_hashmap_key(runtime, "getOrDefaultCall"s, key); return {}; }
 
         auto data = left.data<d_hashmap>();
         auto found = data->map().find(key);

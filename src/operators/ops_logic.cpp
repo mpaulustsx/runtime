@@ -91,26 +91,6 @@ namespace
     {
         return !left.data()->equals(right.data(), true);
     }
-    // HashMap's own do_equals() (ops_hashmap.h) does structural comparison
-    // of its stored key/value pairs - correct for "do these two containers
-    // hold the same data", which is what isEqualTo/isNotEqualTo (routed
-    // through equals_any_any below) still give you. But Vindicta's
-    // OOP_Light uses a HashMap itself as an object's identity
-    // (STORAGE_HASHMAP; see OOP_Light.h's "OBJECT STORAGE" section), and
-    // that project's code compares object identities with == (e.g.
-    // Garrison.sqf's "if (_thisObject == _garrison)"), expecting "is this
-    // literally the same object" - not "do the two objects currently hold
-    // equal member values", which two distinct objects can do by
-    // coincidence at any moment. Compare the underlying data pointer
-    // directly instead of falling into do_equals().
-    value equals_hashmap_hashmap(runtime& runtime, value::cref left, value::cref right)
-    {
-        return left.data().get() == right.data().get();
-    }
-    value notequals_hashmap_hashmap(runtime& runtime, value::cref left, value::cref right)
-    {
-        return left.data().get() != right.data().get();
-    }
     // isEqualRef / isNotEqualRef ask whether two values are the same
     // underlying instance - a different question from isEqualTo's "do they
     // hold equal content right now", which is why the reference documents
@@ -281,7 +261,6 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "==", t_boolean(), t_boolean(), "Check if one value is equal to another. Both values need to be of the same type.", equals_any_any));
     runtime.register_sqfop(binary(4, "isEqualRef", t_any(), t_any(), "Compares two values by reference: true only when both are the same instance. Unlike isEqualTo, two separately built but structurally identical arrays/hashmaps are not equal here.", isequalref_any_any));
     runtime.register_sqfop(binary(4, "isNotEqualRef", t_any(), t_any(), "Compares two values by reference: true unless both are the same instance.", isnotequalref_any_any));
-    runtime.register_sqfop(binary(3, "==", t_hashmap(), t_hashmap(), "Check if one value is equal to another. For HashMap this compares object identity (same underlying container), not stored content - use isEqualTo to compare what two HashMaps currently hold.", equals_hashmap_hashmap));
 
     runtime.register_sqfop(binary(3, "!=", t_scalar(), t_scalar(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_side(), t_side(), "Returns whether one value is not equal to another.", notequals_any_any));
@@ -293,7 +272,17 @@ void sqf::operators::ops_logic(sqf::runtime::runtime& runtime)
     runtime.register_sqfop(binary(3, "!=", t_display(), t_display(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_control(), t_control(), "Returns whether one value is not equal to another.", notequals_any_any));
     runtime.register_sqfop(binary(3, "!=", t_location(), t_location(), "Returns whether one value is not equal to another.", notequals_any_any));
-    runtime.register_sqfop(binary(3, "!=", t_hashmap(), t_hashmap(), "Returns whether one value is not equal to another. For HashMap this compares object identity (same underlying container), not stored content.", notequals_hashmap_hashmap));
+    // == and != are deliberately not registered for HashMap. The engine's
+    // comparison operators accept Number, Side, String, Object, Group,
+    // Structured Text, Config and the other handle types (see the wiki's
+    // Operators page); a HashMap operand is a type error there, and the
+    // absence of any reference comparison for HashMap is exactly what
+    // BI ticket T167311 asked to fix - which is where isEqualRef came from.
+    // Registering == here would make this runtime answer a question the
+    // game refuses, so a mission could pass its whole test suite and still
+    // throw the moment it ran for real. isEqualTo compares content and
+    // isEqualRef compares instance; between them they cover every honest
+    // question, and both work in the game.
     runtime.register_sqfop(binary(4, "isEqualTo", t_any(), t_any(), "Check if one value is equal to another. Both values need to be of the same type.", isequalto_any_any));
     runtime.register_sqfop(binary(4, "isNotEqualTo", t_any(), t_any(), "Check if one value is not equal to another. Both values need to be of the same type.", isnotequalto_any_any));
     runtime.register_sqfop(binary(4, "isEqualType", t_any(), t_any(), "Compares 2 values by their type. A much faster alternative to typeName a == typeName b.", isequaltype_any_any));
